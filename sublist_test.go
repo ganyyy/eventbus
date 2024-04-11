@@ -377,6 +377,7 @@ func TestParallel(t *testing.T) {
 func BenchmarkMS(b *testing.B) {
 	var subj = "aaaaa.bbbbb.ccccc.ddddd.eeeee.fffff.ggggg.hhhhh"
 	var emptyCb = func(p Param[int]) {}
+	var emptyChan = make(chan Param[int], 1)
 	b.Run("sub", func(b *testing.B) {
 		ms := NewMultiSublist(8)
 		b.RunParallel(func(p *testing.PB) {
@@ -388,11 +389,24 @@ func BenchmarkMS(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	b.Run("pub", func(b *testing.B) {
+	b.Run("pub cb", func(b *testing.B) {
 		ms := NewMultiSublist(8)
 		for i := 0; i < 100; i++ {
-			sub := NewSubs(subj, Callback(emptyCb))
-			ms.Subscribe(sub)
+			ms.Subscribe(NewSubs(subj, Callback(emptyCb)))
+		}
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				ms.Publish(subj, 1)
+			}
+		})
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	b.Run("pub chan", func(b *testing.B) {
+		ms := NewMultiSublist(8)
+		for i := 0; i < 100; i++ {
+			ms.Subscribe(NewSubs(subj, Chan(emptyChan)))
 		}
 		b.RunParallel(func(p *testing.PB) {
 			for p.Next() {
