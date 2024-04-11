@@ -30,7 +30,7 @@ import (
 )
 
 func Subject(sub string) *Subscription {
-	return &Subscription{subject: sub, inner: Callback[int](nil)}
+	return NewSubs(sub, nil)
 }
 
 func TestSublist(t *testing.T) {
@@ -201,7 +201,7 @@ func TestMultiSublist(t *testing.T) {
 		}))
 
 		var retChan = make(chan Param[int], 1)
-		var subChan = NewSubs("a", Chan(retChan, Once()))
+		var subChan = NewSubs("a", Chan(retChan), Once())
 
 		require.NoError(t, ms.Subscribe(subCB))
 		require.NoError(t, ms.Subscribe(subChan))
@@ -234,6 +234,16 @@ func TestMultiSublist(t *testing.T) {
 		}
 		snmp = ms.Snmp()
 		require.Equal(t, uint64(2), snmp.Matches.Load())
+
+	})
+
+	t.Run("slow", func(t *testing.T) {
+		var retChan = make(chan Param[int], 1)
+		subChan := NewSubs("a", Chan(retChan))
+		var ms = NewMultiSublist(1)
+		require.NoError(t, ms.Subscribe(subChan))
+		require.NoError(t, ms.Publish("a", 1))
+		require.ErrorIs(t, ms.Publish("a", 1), ErrSlowConsumer)
 	})
 
 	t.Run("Remove", func(t *testing.T) {
@@ -269,90 +279,99 @@ func TestMultiSublist(t *testing.T) {
 }
 
 func TestParallel(t *testing.T) {
-	var wg sync.WaitGroup
-	const (
-		Parallel = 1000
-		Multi    = 10
-	)
-	wg.Add(Parallel)
+	var tt = func(t *testing.T) {
+		var wg sync.WaitGroup
+		const (
+			Parallel = 1000
+			Multi    = 5
+		)
+		wg.Add(Parallel)
 
-	ml := NewMultiSublist(5)
+		ml := NewMultiSublist(5)
 
-	var total atomic.Int64
-	emptyCb := func(p Param[int]) {
-		total.Add(int64(p.Val()))
-	}
-
-	var randPool = sync.Pool{
-		New: func() interface{} {
-			return rand.New(rand.NewSource(time.Now().UnixNano()))
-		},
-	}
-
-	var subsChan = make(chan *Subscription, Parallel)
-	var allSubs = make([]*Subscription, 0, Parallel)
-	var addEnd = make(chan struct{})
-
-	var chanWait sync.WaitGroup
-
-	var receive = make(chan Param[int], Parallel)
-	chanWait.Add(1)
-	go func() {
-		defer chanWait.Done()
-		for p := range receive {
-			emptyCb(p)
+		var total atomic.Int64
+		emptyCb := func(p Param[int]) {
+			total.Add(int64(p.Val()))
 		}
-	}()
 
-	for i := 0; i < Parallel; i++ {
-		go func(i int) {
-			defer wg.Done()
-			r := randPool.Get().(*rand.Rand)
-			defer randPool.Put(r)
-			var sub ISubscribe
-			if r.Intn(2) == 0 {
-				sub = Callback(emptyCb)
-			} else {
-				sub = Chan(receive)
-			}
-			var subj []string
-			// for i := 0; i < 3; i++ {
-			subj = append(subj, fmt.Sprintf("%x", i))
-			// }
-			subs := NewSubs(strings.Join(subj, TSep), sub)
-			require.NoError(t, ml.Subscribe(subs))
-			subsChan <- subs
-		}(i)
-	}
-	go func() {
-		for sub := range subsChan {
-			allSubs = append(allSubs, sub)
+		var randPool = sync.Pool{
+			New: func() interface{} {
+				return rand.New(rand.NewSource(time.Now().UnixNano()))
+			},
 		}
-		close(addEnd)
-	}()
-	wg.Wait()
-	close(subsChan)
-	<-addEnd
 
-	snmp := ml.Snmp()
-	require.Equal(t, uint64(Parallel), snmp.Count.Load())
+		var subsChan = make(chan *Subscription, Parallel)
+		var allSubs = make([]*Subscription, 0, Parallel)
+		var addEnd = make(chan struct{})
 
-	wg.Add(Parallel * Multi)
-	for i := 0; i < Parallel*Multi; i++ {
+		var chanWait sync.WaitGroup
+
+		var receive = make(chan Param[int], Parallel*Multi)
+
+		for i := 0; i < Parallel; i++ {
+			go func(i int) {
+				defer wg.Done()
+				r := randPool.Get().(*rand.Rand)
+				defer randPool.Put(r)
+				var sub ISubsCall
+				if r.Intn(2) == 0 {
+					sub = Callback(emptyCb)
+				} else {
+					sub = Chan(receive)
+				}
+				var subj []string
+				// for i := 0; i < 3; i++ {
+				subj = append(subj, fmt.Sprintf("%x", i))
+				// }
+				subs := NewSubs(strings.Join(subj, TSep), sub)
+				require.NoError(t, ml.Subscribe(subs))
+				subsChan <- subs
+			}(i)
+		}
 		go func() {
-			defer wg.Done()
-			r := randPool.Get().(*rand.Rand)
-			defer randPool.Put(r)
-			sub := allSubs[r.Intn(len(allSubs))]
-			require.NoError(t, ml.Publish(sub.Subject(), 1))
+			for sub := range subsChan {
+				allSubs = append(allSubs, sub)
+			}
+			close(addEnd)
 		}()
-	}
-	wg.Wait()
+		wg.Wait()
+		close(subsChan)
+		<-addEnd
 
-	time.Sleep(time.Second)
-	close(receive)
-	chanWait.Wait()
-	require.Equal(t, int64(Parallel*Multi), total.Load())
+		snmp := ml.Snmp()
+		require.Equal(t, uint64(Parallel), snmp.Count.Load())
+
+		chanWait.Add(1)
+		go func() {
+			defer chanWait.Done()
+			for p := range receive {
+				emptyCb(p)
+			}
+		}()
+
+		wg.Add(Parallel)
+		for i := 0; i < Parallel; i++ {
+			go func() {
+				defer wg.Done()
+				r := randPool.Get().(*rand.Rand)
+				defer randPool.Put(r)
+				for j := 0; j < Multi; j++ {
+					sub := allSubs[r.Intn(len(allSubs))]
+					require.NoError(t, ml.Publish(sub.Subject(), 1))
+				}
+			}()
+		}
+		wg.Wait()
+		close(receive)
+		chanWait.Wait()
+
+		require.Zero(t, len(receive))
+		require.Equal(t, int64(Parallel*Multi), total.Load())
+	}
+
+	for i := 0; i < 100; i++ {
+		tt(t)
+	}
 }
 
 func BenchmarkMS(b *testing.B) {
@@ -371,8 +390,10 @@ func BenchmarkMS(b *testing.B) {
 
 	b.Run("pub", func(b *testing.B) {
 		ms := NewMultiSublist(8)
-		sub := NewSubs(subj, Callback(emptyCb))
-		ms.Subscribe(sub)
+		for i := 0; i < 100; i++ {
+			sub := NewSubs(subj, Callback(emptyCb))
+			ms.Subscribe(sub)
+		}
 		b.RunParallel(func(p *testing.PB) {
 			for p.Next() {
 				ms.Publish(subj, 1)

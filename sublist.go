@@ -34,6 +34,22 @@ const (
 	StackCacheSize = 32  // normal stack cache size
 )
 
+var sublistResultPool = sync.Pool{
+	New: func() any {
+		return &sublistResult{}
+	},
+}
+
+func getResult() *sublistResult {
+	return sublistResultPool.Get().(*sublistResult)
+}
+
+func putResult(r *sublistResult) {
+	clear(r.psubs)
+	r.psubs = r.psubs[:0]
+	sublistResultPool.Put(r)
+}
+
 type sublistResult struct {
 	psubs []*Subscription
 }
@@ -64,16 +80,21 @@ func NewSublist() *Sublist {
 }
 
 type Subscription struct {
-	subject string     // topic
-	inner   ISubscribe // inner data
+	subject string // topic
+	status  atomic.Int32
+	sub     ISubsCall
+
+	subsOption
 }
 
 // NewSubs
-func NewSubs(subject string, inner ISubscribe) *Subscription {
-	return &Subscription{
+func NewSubs(subject string, call ISubsCall, opts ...Opt) *Subscription {
+	var subs = Subscription{
 		subject: subject,
-		inner:   inner,
+		sub:     call,
 	}
+	subs.apply(opts...)
+	return &subs
 }
 
 // Subject
@@ -89,7 +110,31 @@ func (s *Subscription) IsDone() bool {
 	if s == nil {
 		return true
 	}
-	return s.inner.isDone()
+	return s.isDone()
+}
+
+// isOnce returns true if the subscribe is once
+func (s *Subscription) isOnce() bool { return s.once }
+
+// canCall returns true if the subscribe can be called
+func (s *Subscription) canCall() bool {
+	// if the subscribe is done, return false
+	// if the subscribe is once and executed, return false
+	return !s.isDone() &&
+		(!s.isOnce() ||
+			s.status.CompareAndSwap(
+				statusInit, statusExecuted,
+			))
+}
+
+// stop stops the subscribe
+func (s *Subscription) stop() {
+	s.status.Store(statusClosed)
+}
+
+// isDone returns true if the subscribe is closed
+func (s *Subscription) isDone() bool {
+	return s.status.Load() == statusClosed
 }
 
 // split splits the subject into tokens.
@@ -98,9 +143,12 @@ func (s *Subscription) split(cache []string) ([]string, bool) {
 	return SplitSubject(subject, cache)
 }
 
-// stop
-func (s *Subscription) stop() {
-	s.inner.stop()
+// call
+func (s *Subscription) call(param any) bool {
+	if !s.canCall() {
+		return false
+	}
+	return s.sub.run(param)
 }
 
 // SplitSubject splits the subject into tokens.
@@ -205,7 +253,7 @@ func (s *Sublist) removeFromNodeInLock(n *Node, sub *Subscription) (found, last 
 }
 
 // Publish
-func (s *Sublist) Publish(subject string, param any) error {
+func (s *Sublist) Publish(subject string, param any) (err error) {
 	if s == nil {
 		return ErrSublistNil
 	}
@@ -215,20 +263,20 @@ func (s *Sublist) Publish(subject string, param any) error {
 	ret := s.match(subject)
 	var removeOnces = ret.psubs[:0]
 	for _, sub := range ret.psubs {
-		success := sub.inner.call(param)
-		isOnce := sub.inner.isOnce()
+		success := sub.call(param)
+		isOnce := sub.isOnce()
 		if success && isOnce {
 			removeOnces = append(removeOnces, sub)
 		} else if !success && !isOnce {
-			// TODO slow consumer
 			// only in channel mode
-			_ = ErrSlowConsumer
+			err = ErrSlowConsumer
 		}
 	}
 	if len(removeOnces) > 0 {
 		s.RemoveBatch(removeOnces)
 	}
-	return nil
+	putResult(ret)
+	return
 }
 
 func (s *Sublist) Remove(sub *Subscription) error {
@@ -382,7 +430,7 @@ func (s *Sublist) match(subject string) *sublistResult {
 	}
 
 	s.Matches.Add(1)
-	var ret = new(sublistResult)
+	var ret = getResult()
 
 	s.lock.RLock()
 	defer s.lock.RUnlock()
@@ -444,14 +492,12 @@ func (m *MultiSublist) getSublist(subject string) *Sublist {
 
 // Publish
 func (m *MultiSublist) Publish(subject string, param any) error {
-
 	return m.getSublist(subject).Publish(subject, param)
 }
 
 // Subscribe
 func (m *MultiSublist) Subscribe(sub *Subscription) error {
-	err := m.getSublist(sub.Subject()).Insert(sub)
-	return err
+	return m.getSublist(sub.Subject()).Insert(sub)
 }
 
 // Remove
