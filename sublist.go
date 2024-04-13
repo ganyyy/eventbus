@@ -112,11 +112,18 @@ func (s *Subscription) isOnce() bool { return s.once }
 func (s *Subscription) canCall() bool {
 	// if the subscribe is done, return false
 	// if the subscribe is once and executed, return false
-	return !s.isDone() &&
-		(!s.isOnce() ||
-			s.status.CompareAndSwap(
-				statusInit, statusExecuted,
-			))
+
+	if s.isDone() {
+		return false
+	}
+	if !s.isOnce() {
+		return true
+	}
+
+	return s.status.CompareAndSwap(
+		statusInit, statusExecuted,
+	)
+
 }
 
 // stop stops the subscribe
@@ -258,8 +265,10 @@ func (s *Sublist) Publish(subject string, param any) (err error) {
 		if success && isOnce {
 			removeOnces = append(removeOnces, sub)
 		} else if !success && !isOnce {
-			// only in channel mode
-			slowConsumeCount++
+			if !sub.isDone() {
+				// only in channel mode
+				slowConsumeCount++
+			}
 		}
 	}
 	if len(removeOnces) > 0 {
@@ -477,6 +486,9 @@ func (m *MultiSublist) Snmp() *Snmp {
 
 // getSublist use map hash to get the sublist by subject.
 func (m *MultiSublist) getSublist(subject string) *Sublist {
+	if m == nil {
+		return nil
+	}
 	hash := maphash.String(m.seed, subject)
 	return m.sublists[hash%uint64(len(m.sublists))]
 }

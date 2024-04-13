@@ -34,6 +34,42 @@ func Subject(sub string) *Subscription {
 }
 
 func TestSublist(t *testing.T) {
+
+	t.Run("subs", func(t *testing.T) {
+		var ret atomic.Int64
+
+		var s = NewSubs("a", Callback(func(p Param[int]) {
+			ret.Add(int64(p.Val()))
+		}), Once())
+		var wg sync.WaitGroup
+		const P = 10
+		wg.Add(P)
+
+		calc := func() {
+			defer wg.Done()
+			s.call(1)
+		}
+
+		for i := 0; i < P; i++ {
+			go calc()
+		}
+		wg.Wait()
+
+		require.Equal(t, int64(1), ret.Load())
+
+		s = NewSubs("a", nil)
+		s.stop()
+		require.False(t, s.canCall())
+	})
+
+	t.Run("SublistNil", func(t *testing.T) {
+		var s *Sublist
+		require.ErrorIs(t, s.Insert(Subject("a")), ErrSublistNil)
+		require.ErrorIs(t, s.Remove(Subject("a")), ErrSublistNil)
+		require.ErrorIs(t, s.RemoveBatch(nil), ErrSublistNil)
+		require.ErrorIs(t, s.Publish("a", 1), ErrSublistNil)
+	})
+
 	defaultSublistWithSubs := func() (*Sublist, []*Subscription) {
 		// Create a new sublist
 		sublist := NewSublist()
