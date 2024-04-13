@@ -26,23 +26,34 @@ var (
 	ErrInvalidSubject = errors.New("sublist: invalid subject")
 	ErrSublistNil     = errors.New("sublist: sublist is nil")
 	ErrNotFound       = errors.New("sublist: not found")
+	ErrSlowConsumer   = errors.New("subjection: slow consumer")
 )
 
-var (
-	ErrSlowConsumer = errors.New("subjection: slow consumer")
-)
-
-type SubjectError struct {
+type subjectError struct {
 	subject string
 	err     error
 }
 
 // Error
-func (e *SubjectError) Error() string {
+func (e *subjectError) Error() string {
 	return fmt.Sprintf("sublist: remove %s error: %v", e.subject, e.err)
 }
 
 // Is
-func (e *SubjectError) Is(target error) bool {
+func (e *subjectError) Is(target error) bool {
 	return target == e.err
+}
+
+type slowConsumerErr struct {
+	count int
+}
+
+// Error
+func (e slowConsumerErr) Error() string {
+	return fmt.Sprintf("%s count %d", ErrSlowConsumer.Error(), e.count)
+}
+
+// Is
+func (e slowConsumerErr) Is(target error) bool {
+	return target == ErrSlowConsumer
 }

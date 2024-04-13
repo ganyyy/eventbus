@@ -82,13 +82,13 @@ func NewSublist() *Sublist {
 type Subscription struct {
 	subject string // topic
 	status  atomic.Int32
-	sub     ISubsCall
+	sub     ICall
 
 	subsOption
 }
 
 // NewSubs
-func NewSubs(subject string, call ISubsCall, opts ...Opt) *Subscription {
+func NewSubs(subject string, call ICall, opts ...Opt) *Subscription {
 	var subs = Subscription{
 		subject: subject,
 		sub:     call,
@@ -103,14 +103,6 @@ func (s *Subscription) Subject() string {
 		return ""
 	}
 	return s.subject
-}
-
-// IsDone
-func (s *Subscription) IsDone() bool {
-	if s == nil {
-		return true
-	}
-	return s.isDone()
 }
 
 // isOnce returns true if the subscribe is once
@@ -220,10 +212,7 @@ func (s *Sublist) Insert(sub *Subscription) error {
 	} else if n.Psubs.Len() > PListCacheMin {
 		// build a quick cache when the number of subscriptions
 		// is greater than the minimum quick cache value
-		n.Plist = make([]*Subscription, 0, n.Psubs.Len())
-		for sub := range n.Psubs {
-			n.Plist = append(n.Plist, sub)
-		}
+		n.Plist = n.Psubs.AppendToSlice(nil)
 	}
 
 	s.Count.Add(1)
@@ -260,6 +249,7 @@ func (s *Sublist) Publish(subject string, param any) (err error) {
 	if !ValidSubject(subject) {
 		return ErrInvalidSubject
 	}
+	var slowConsumeCount int
 	ret := s.match(subject)
 	var removeOnces = ret.psubs[:0]
 	for _, sub := range ret.psubs {
@@ -269,13 +259,16 @@ func (s *Sublist) Publish(subject string, param any) (err error) {
 			removeOnces = append(removeOnces, sub)
 		} else if !success && !isOnce {
 			// only in channel mode
-			err = ErrSlowConsumer
+			slowConsumeCount++
 		}
 	}
 	if len(removeOnces) > 0 {
 		s.RemoveBatch(removeOnces)
 	}
 	putResult(ret)
+	if slowConsumeCount > 0 {
+		err = slowConsumerErr{count: slowConsumeCount}
+	}
 	return
 }
 
@@ -309,7 +302,7 @@ func (s *Sublist) RemoveBatch(subs []*Subscription) error {
 		if ValidSubject(sub.Subject()) {
 			validSubs = append(validSubs, sub)
 		} else {
-			allErrors = append(allErrors, &SubjectError{
+			allErrors = append(allErrors, &subjectError{
 				subject: sub.Subject(),
 				err:     ErrInvalidSubject,
 			})
@@ -341,7 +334,7 @@ func (s *Sublist) RemoveBatch(subs []*Subscription) error {
 		s.lock.Lock()
 		for _, sub := range subs {
 			if err := s.remove(sub, false, false); err != nil {
-				allErrors = append(allErrors, &SubjectError{
+				allErrors = append(allErrors, &subjectError{
 					subject: sub.Subject(),
 					err:     err,
 				})
@@ -444,9 +437,7 @@ func (s *sublistResult) add(node *Node) {
 	if node.Plist != nil {
 		s.psubs = append(s.psubs, node.Plist...)
 	} else {
-		for sub := range node.Psubs {
-			s.psubs = append(s.psubs, sub)
-		}
+		s.psubs = node.Psubs.AppendToSlice(s.psubs)
 	}
 }
 

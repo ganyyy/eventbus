@@ -23,20 +23,20 @@ const (
 	statusClosed          // the subscribe is closed
 )
 
-type subsCallback[T any] func(Param[T])
+type ICall interface{ run(any) (success bool) }
 
-type subsChan[T any] chan Param[T]
+type callback[T any] func(Param[T])
 
-type ISubsCall interface{ run(any) (success bool) }
+type channel[T any] chan Param[T]
 
 // run
-func (s subsCallback[T]) run(v any) bool {
+func (s callback[T]) run(v any) bool {
 	s(PackParam[T](v))
 	return true
 }
 
 // run
-func (s subsChan[T]) run(v any) bool {
+func (s channel[T]) run(v any) bool {
 	select {
 	case s <- PackParam[T](v):
 		return true
@@ -66,7 +66,7 @@ type Opt func(*subsOption)
 
 type subsOption struct {
 	once  bool // once subscribe
-	queue bool // queue subscribe
+	queue bool // TODO queue subscribe
 }
 
 // setOnce
@@ -89,18 +89,16 @@ func Once() Opt { return (*subsOption).setOnce }
 func Queue() Opt { return (*subsOption).setQueue }
 
 // Chan creates a new subscribe with a channel
-func Chan[T any](notify chan Param[T]) ISubsCall {
-	return subsChan[T](notify)
+func Chan[T any](notify chan Param[T]) ICall {
+	return channel[T](notify)
 }
 
 // Callback creates a new subscribe with a callback
-func Callback[T any](cb func(Param[T])) ISubsCall {
-	return subsCallback[T](cb)
+func Callback[T any](cb func(Param[T])) ICall {
+	return callback[T](cb)
 }
 
-func Any[T any, F interface {
-	chan Param[T] | func(Param[T])
-}](inner F) ISubsCall {
+func Any[T any, F chan Param[T] | func(Param[T])](inner F) ICall {
 	switch v := (interface{})(inner).(type) {
 	case chan Param[T]:
 		return Chan(v)

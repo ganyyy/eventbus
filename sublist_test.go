@@ -181,8 +181,8 @@ func TestMultiSublist(t *testing.T) {
 
 	t.Run("Subscribe", func(t *testing.T) {
 
-		emptyCallback := Callback[int](nil)
-		emptyChan := Chan[int](nil)
+		emptyCallback := Any[int, func(Param[int])](nil)
+		emptyChan := Any[int, chan Param[int]](nil)
 
 		var ms = NewMultiSublist(1)
 		require.NoError(t, ms.Subscribe(NewSubs("a", emptyCallback)))
@@ -212,9 +212,9 @@ func TestMultiSublist(t *testing.T) {
 
 		const Val = 100
 
-		require.False(t, subChan.IsDone())
+		require.False(t, subChan.isDone())
 		require.NoError(t, ms.Publish("a", Val))
-		require.True(t, subChan.IsDone())
+		require.True(t, subChan.isDone())
 
 		snmp = ms.Snmp()
 
@@ -243,7 +243,9 @@ func TestMultiSublist(t *testing.T) {
 		var ms = NewMultiSublist(1)
 		require.NoError(t, ms.Subscribe(subChan))
 		require.NoError(t, ms.Publish("a", 1))
-		require.ErrorIs(t, ms.Publish("a", 1), ErrSlowConsumer)
+		err := ms.Publish("a", 1)
+		require.ErrorIs(t, err, ErrSlowConsumer)
+		t.Logf("error: %v", err)
 	})
 
 	t.Run("Remove", func(t *testing.T) {
@@ -313,7 +315,7 @@ func TestParallel(t *testing.T) {
 				defer wg.Done()
 				r := randPool.Get().(*rand.Rand)
 				defer randPool.Put(r)
-				var sub ISubsCall
+				var sub ICall
 				if r.Intn(2) == 0 {
 					sub = Callback(emptyCb)
 				} else {
@@ -378,6 +380,10 @@ func BenchmarkMS(b *testing.B) {
 	var subj = "aaaaa.bbbbb.ccccc.ddddd.eeeee.fffff.ggggg.hhhhh"
 	var emptyCb = func(p Param[int]) {}
 	var emptyChan = make(chan Param[int], 1)
+
+	_ = emptyCb
+	_ = emptyChan
+
 	b.Run("sub", func(b *testing.B) {
 		ms := NewMultiSublist(8)
 		b.RunParallel(func(p *testing.PB) {
@@ -389,9 +395,11 @@ func BenchmarkMS(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
+	const ElementNum = 100
+
 	b.Run("pub cb", func(b *testing.B) {
 		ms := NewMultiSublist(8)
-		for i := 0; i < 100; i++ {
+		for i := 0; i < ElementNum; i++ {
 			ms.Subscribe(NewSubs(subj, Callback(emptyCb)))
 		}
 		b.RunParallel(func(p *testing.PB) {
@@ -405,7 +413,7 @@ func BenchmarkMS(b *testing.B) {
 
 	b.Run("pub chan", func(b *testing.B) {
 		ms := NewMultiSublist(8)
-		for i := 0; i < 100; i++ {
+		for i := 0; i < ElementNum; i++ {
 			ms.Subscribe(NewSubs(subj, Chan(emptyChan)))
 		}
 		b.RunParallel(func(p *testing.PB) {

@@ -28,9 +28,16 @@ type Level struct {
 }
 
 type Node struct {
-	Next  *Level             //
-	Psubs Set[*Subscription] //
-	Plist []*Subscription    //
+	Next  *Level              // next level
+	Psubs ISet[*Subscription] // original set
+	Plist []*Subscription     // cache list
+}
+
+func NewNode() *Node {
+	return &Node{
+		Psubs: NewMixSet[*Subscription](),
+		// Psubs: NewSet[*Subscription](InitNodeSubCache),
+	}
 }
 
 type LevelCache struct {
@@ -55,15 +62,9 @@ func (l *Level) PruneNode(topic string) {
 	delete(l.Nodes, topic)
 }
 
-func NewNode() *Node {
-	return &Node{
-		Psubs: NewSet[*Subscription](InitNodeSubCache),
-	}
-}
-
 // IsEmpty
 func (n *Node) IsEmpty() bool {
-	return len(n.Psubs) == 0 && (n.Next == nil || n.Next.NumNodes() == 0)
+	return n.Psubs.Len() == 0 && (n.Next == nil || n.Next.NumNodes() == 0)
 }
 
 // MatchLevel
