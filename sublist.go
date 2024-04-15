@@ -72,8 +72,8 @@ type Sublist struct {
 	root  *Level
 }
 
-// NewSublist
-func NewSublist() *Sublist {
+// NewBus
+func NewBus() *Sublist {
 	return &Sublist{
 		root: NewLevel(),
 	}
@@ -179,8 +179,18 @@ func ValidSubject(subject string) bool {
 	return start < len(subject)
 }
 
-// Insert adds the subscription into the sublist.
-func (s *Sublist) Insert(sub *Subscription) error {
+// SnmpInfo
+func (s *Sublist) SnmpInfo() *Snmp {
+	var ret Snmp
+	ret.Count.Store(s.Count.Load())
+	ret.Inserts.Store(s.Inserts.Load())
+	ret.Removes.Store(s.Removes.Load())
+	ret.Matches.Store(s.Matches.Load())
+	return &ret
+}
+
+// Subscribe adds the subscription into the sublist.
+func (s *Sublist) Subscribe(sub *Subscription) error {
 	if s == nil {
 		return ErrSublistNil
 	}
@@ -272,7 +282,7 @@ func (s *Sublist) Publish(subject string, param any) (err error) {
 		}
 	}
 	if len(removeOnces) > 0 {
-		s.RemoveBatch(removeOnces)
+		s.UnsubscribeBatch(removeOnces)
 	}
 	putResult(ret)
 	if slowConsumeCount > 0 {
@@ -281,15 +291,15 @@ func (s *Sublist) Publish(subject string, param any) (err error) {
 	return
 }
 
-func (s *Sublist) Remove(sub *Subscription) error {
+func (s *Sublist) Unsubscribe(sub *Subscription) error {
 	if s == nil {
 		return ErrSublistNil
 	}
 	return s.remove(sub, true, true)
 }
 
-// RemoveBatch
-func (s *Sublist) RemoveBatch(subs []*Subscription) error {
+// UnsubscribeBatch
+func (s *Sublist) UnsubscribeBatch(subs []*Subscription) error {
 	if s == nil {
 		return ErrSublistNil
 	}
@@ -297,7 +307,7 @@ func (s *Sublist) RemoveBatch(subs []*Subscription) error {
 		return nil
 	}
 	if len(subs) == 1 {
-		return s.Remove(subs[0])
+		return s.Unsubscribe(subs[0])
 	}
 
 	// split the subscriptions into batches
@@ -455,7 +465,7 @@ type MultiSublist struct {
 	seed     maphash.Seed
 }
 
-func NewMultiSublist(length uint) *MultiSublist {
+func NewMultiBus(length uint) *MultiSublist {
 
 	if length < 1 {
 		panic("length must be greater than 0")
@@ -463,7 +473,7 @@ func NewMultiSublist(length uint) *MultiSublist {
 
 	lists := make([]*Sublist, length)
 	for i := range lists {
-		lists[i] = NewSublist()
+		lists[i] = NewBus()
 	}
 
 	return &MultiSublist{
@@ -472,8 +482,8 @@ func NewMultiSublist(length uint) *MultiSublist {
 	}
 }
 
-// Snmp
-func (m *MultiSublist) Snmp() *Snmp {
+// SnmpInfo
+func (m *MultiSublist) SnmpInfo() *Snmp {
 	var snmp Snmp
 	for _, sublist := range m.sublists {
 		snmp.Count.Add(sublist.Count.Load())
@@ -500,16 +510,20 @@ func (m *MultiSublist) Publish(subject string, param any) error {
 
 // Subscribe
 func (m *MultiSublist) Subscribe(sub *Subscription) error {
-	return m.getSublist(sub.Subject()).Insert(sub)
+	return m.getSublist(sub.Subject()).Subscribe(sub)
 }
 
-// Remove
-func (m *MultiSublist) Remove(subs ...*Subscription) error {
+// Unsubscribe
+func (m *MultiSublist) Unsubscribe(subs *Subscription) error {
+	return m.getSublist(subs.Subject()).Unsubscribe(subs)
+}
+
+// UnsubscribeBatch
+func (m *MultiSublist) UnsubscribeBatch(subs []*Subscription) error {
 	if len(subs) < 1 {
 		return nil
 	} else if len(subs) == 1 {
-		sub := subs[0]
-		return m.getSublist(sub.Subject()).Remove(sub)
+		return m.Unsubscribe(subs[0])
 	} else {
 		var sublistSet = make(map[*Sublist][]*Subscription, InitNodeSubCache)
 		for _, sub := range subs {
@@ -521,7 +535,7 @@ func (m *MultiSublist) Remove(subs ...*Subscription) error {
 		}
 		var all []error
 		for sublist, subs := range sublistSet {
-			if err := sublist.RemoveBatch(subs); err != nil {
+			if err := sublist.UnsubscribeBatch(subs); err != nil {
 				all = append(all, err)
 			}
 		}
@@ -530,4 +544,19 @@ func (m *MultiSublist) Remove(subs ...*Subscription) error {
 }
 
 // Default is the default multi-sublist.
-var Default = NewMultiSublist(32)
+var Default = NewMultiBus(32)
+
+type ISublist interface {
+	Subscribe(sub *Subscription) error
+	Publish(subject string, param any) error
+
+	Unsubscribe(sub *Subscription) error
+	UnsubscribeBatch(subs []*Subscription) error
+
+	SnmpInfo() *Snmp
+}
+
+var (
+	_ ISublist = (*Sublist)(nil)
+	_ ISublist = (*MultiSublist)(nil)
+)

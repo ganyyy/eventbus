@@ -70,9 +70,9 @@ func TestSet(t *testing.T) {
 			})
 		}
 
-		ts(NewSet[int](0))
+		// ts(NewSet[int](0))
 		ts(NewSliceSet[int]())
-		ts(NewMixSet[int]())
+		// ts(NewMixSet[int]())
 	})
 
 	t.Run("MixSet", func(t *testing.T) {

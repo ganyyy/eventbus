@@ -25,9 +25,9 @@ const (
 
 type ICall interface{ run(any) (success bool) }
 
-type callback[T any] func(Param[T])
+type callback[T any] func(Var[T])
 
-type channel[T any] chan Param[T]
+type channel[T any] chan Var[T]
 
 // run
 func (s callback[T]) run(v any) bool {
@@ -45,22 +45,18 @@ func (s channel[T]) run(v any) bool {
 	}
 }
 
-type Param[T any] struct{ v any }
+type Var[T any] struct{ v any }
 
 // Val
-func (o Param[T]) Val() T {
+func (o Var[T]) Val() T {
 	val, _ := o.Raw().(T)
 	return val
 }
 
 // Raw
-func (o Param[T]) Raw() any {
-	return o.v
-}
+func (o Var[T]) Raw() any { return o.v }
 
-func PackParam[T any](val any) Param[T] {
-	return Param[T]{val}
-}
+func PackParam[T any](val any) Var[T] { return Var[T]{val} }
 
 type Opt func(*subsOption)
 
@@ -89,20 +85,20 @@ func Once() Opt { return (*subsOption).setOnce }
 func Queue() Opt { return (*subsOption).setQueue }
 
 // Chan creates a new subscribe with a channel
-func Chan[T any](notify chan Param[T]) ICall {
+func Chan[T any](notify chan Var[T]) ICall {
 	return channel[T](notify)
 }
 
 // Callback creates a new subscribe with a callback
-func Callback[T any](cb func(Param[T])) ICall {
+func Callback[T any](cb func(Var[T])) ICall {
 	return callback[T](cb)
 }
 
-func Any[T any, F chan Param[T] | func(Param[T])](inner F) ICall {
+func Any[T any, F chan Var[T] | func(Var[T])](inner F) ICall {
 	switch v := (interface{})(inner).(type) {
-	case chan Param[T]:
+	case chan Var[T]:
 		return Chan(v)
-	case func(Param[T]):
+	case func(Var[T]):
 		return Callback(v)
 	default:
 		panic("invalid inner")

@@ -38,7 +38,7 @@ func TestSublist(t *testing.T) {
 	t.Run("subs", func(t *testing.T) {
 		var ret atomic.Int64
 
-		var s = NewSubs("a", Callback(func(p Param[int]) {
+		var s = NewSubs("a", Callback(func(p Var[int]) {
 			ret.Add(int64(p.Val()))
 		}), Once())
 		var wg sync.WaitGroup
@@ -64,15 +64,15 @@ func TestSublist(t *testing.T) {
 
 	t.Run("SublistNil", func(t *testing.T) {
 		var s *Sublist
-		require.ErrorIs(t, s.Insert(Subject("a")), ErrSublistNil)
-		require.ErrorIs(t, s.Remove(Subject("a")), ErrSublistNil)
-		require.ErrorIs(t, s.RemoveBatch(nil), ErrSublistNil)
+		require.ErrorIs(t, s.Subscribe(Subject("a")), ErrSublistNil)
+		require.ErrorIs(t, s.Unsubscribe(Subject("a")), ErrSublistNil)
+		require.ErrorIs(t, s.UnsubscribeBatch(nil), ErrSublistNil)
 		require.ErrorIs(t, s.Publish("a", 1), ErrSublistNil)
 	})
 
 	defaultSublistWithSubs := func() (*Sublist, []*Subscription) {
 		// Create a new sublist
-		sublist := NewSublist()
+		sublist := NewBus()
 		// Insert some subscriptions
 		subs := []*Subscription{
 			Subject("a"),
@@ -80,7 +80,7 @@ func TestSublist(t *testing.T) {
 			Subject("a.b.c"),
 		}
 		for _, sub := range subs {
-			sublist.Insert(sub)
+			sublist.Subscribe(sub)
 		}
 		return sublist, subs
 
@@ -95,9 +95,9 @@ func TestSublist(t *testing.T) {
 	t.Run("Insert", func(t *testing.T) {
 		var sublist = defaultSublist()
 
-		require.NoError(t, sublist.Insert(Subject("a")))
-		require.Error(t, sublist.Insert(Subject("a.")))
-		require.Error(t, sublist.Insert(Subject("")))
+		require.NoError(t, sublist.Subscribe(Subject("a")))
+		require.Error(t, sublist.Subscribe(Subject("a.")))
+		require.Error(t, sublist.Subscribe(Subject("")))
 
 		require.Equal(t, uint64(4), sublist.Count.Load())
 	})
@@ -139,13 +139,13 @@ func TestSublist(t *testing.T) {
 	})
 
 	t.Run("MatchMany", func(t *testing.T) {
-		var sublist = NewSublist()
+		var sublist = NewBus()
 		const TOTAL = PListCacheMin * 2
 		var subSet = NewSet[*Subscription](0)
 		for i := 0; i < TOTAL; i++ {
 			sub := Subject("a")
 			subSet.Add(sub)
-			sublist.Insert(sub)
+			sublist.Subscribe(sub)
 		}
 		require.Equal(t, TOTAL, subSet.Len())
 		require.Equal(t, uint64(TOTAL), sublist.Count.Load())
@@ -157,44 +157,44 @@ func TestSublist(t *testing.T) {
 		}
 		require.Equal(t, uint64(1), sublist.Matches.Load())
 
-		require.NoError(t, sublist.Remove(ret.psubs[0]))
+		require.NoError(t, sublist.Unsubscribe(ret.psubs[0]))
 	})
 
 	t.Run("Remove", func(t *testing.T) {
 		var sublist, subs = defaultSublistWithSubs()
 		require.Equal(t, uint64(3), sublist.Count.Load())
 
-		require.ErrorIs(t, sublist.Remove(Subject("a.")), ErrInvalidSubject)
-		require.ErrorIs(t, sublist.Remove(Subject("a")), ErrNotFound)
-		require.NoError(t, sublist.Remove(subs[0]))
+		require.ErrorIs(t, sublist.Unsubscribe(Subject("a.")), ErrInvalidSubject)
+		require.ErrorIs(t, sublist.Unsubscribe(Subject("a")), ErrNotFound)
+		require.NoError(t, sublist.Unsubscribe(subs[0]))
 		require.Equal(t, uint64(2), sublist.Count.Load())
 		require.Equal(t, uint64(1), sublist.Removes.Load())
 
-		require.ErrorIs(t, sublist.Remove(Subject("a.c")), ErrNotFound)
-		require.ErrorIs(t, sublist.RemoveBatch(subs[:1]), ErrNotFound)
+		require.ErrorIs(t, sublist.Unsubscribe(Subject("a.c")), ErrNotFound)
+		require.ErrorIs(t, sublist.UnsubscribeBatch(subs[:1]), ErrNotFound)
 
-		require.NoError(t, sublist.RemoveBatch(subs[1:]))
+		require.NoError(t, sublist.UnsubscribeBatch(subs[1:]))
 		require.Equal(t, uint64(0), sublist.Count.Load())
 		require.Equal(t, uint64(3), sublist.Removes.Load())
 
-		require.ErrorIs(t, sublist.RemoveBatch(subs), ErrNotFound)
+		require.ErrorIs(t, sublist.UnsubscribeBatch(subs), ErrNotFound)
 
-		err := sublist.RemoveBatch(append(subs, Subject("a.")))
+		err := sublist.UnsubscribeBatch(append(subs, Subject("a.")))
 		require.ErrorIs(t, err, ErrInvalidSubject)
 		require.ErrorIs(t, err, ErrNotFound)
 
-		require.ErrorIs(t, sublist.RemoveBatch([]*Subscription{
+		require.ErrorIs(t, sublist.UnsubscribeBatch([]*Subscription{
 			Subject(""),
 			Subject("a."),
 			Subject(".a"),
 			Subject("a.b."),
 		}), ErrInvalidSubject)
 
-		require.NoError(t, sublist.RemoveBatch(nil))
+		require.NoError(t, sublist.UnsubscribeBatch(nil))
 	})
 
 	t.Run("RemoveBatch", func(t *testing.T) {
-		sublist := NewSublist()
+		sublist := NewBus()
 
 		const subject = "a"
 		const NUM = 200
@@ -202,11 +202,11 @@ func TestSublist(t *testing.T) {
 		for i := 0; i < NUM; i++ {
 			sub := Subject(subject)
 			allSubject = append(allSubject, sub)
-			require.NoError(t, sublist.Insert(sub))
+			require.NoError(t, sublist.Subscribe(sub))
 		}
 		require.Equal(t, uint64(NUM), sublist.Count.Load())
 
-		require.NoError(t, sublist.RemoveBatch(allSubject))
+		require.NoError(t, sublist.UnsubscribeBatch(allSubject))
 		require.Equal(t, uint64(0), sublist.Count.Load())
 		require.Equal(t, uint64(NUM), sublist.Removes.Load())
 
@@ -217,10 +217,10 @@ func TestMultiSublist(t *testing.T) {
 
 	t.Run("Subscribe", func(t *testing.T) {
 
-		emptyCallback := Any[int, func(Param[int])](nil)
-		emptyChan := Any[int, chan Param[int]](nil)
+		emptyCallback := Any[int, func(Var[int])](nil)
+		emptyChan := Any[int, chan Var[int]](nil)
 
-		var ms = NewMultiSublist(1)
+		var ms = NewMultiBus(1)
 		require.NoError(t, ms.Subscribe(NewSubs("a", emptyCallback)))
 		require.NoError(t, ms.Subscribe(NewSubs("a", emptyChan)))
 
@@ -229,20 +229,20 @@ func TestMultiSublist(t *testing.T) {
 	})
 
 	t.Run("Publish", func(t *testing.T) {
-		var ms = NewMultiSublist(1)
+		var ms = NewMultiBus(1)
 
 		var cbRet int
-		var subCB = NewSubs("a", Callback(func(p Param[int]) {
+		var subCB = NewSubs("a", Callback(func(p Var[int]) {
 			cbRet = p.Val()
 		}))
 
-		var retChan = make(chan Param[int], 1)
+		var retChan = make(chan Var[int], 1)
 		var subChan = NewSubs("a", Chan(retChan), Once())
 
 		require.NoError(t, ms.Subscribe(subCB))
 		require.NoError(t, ms.Subscribe(subChan))
 
-		snmp := ms.Snmp()
+		snmp := ms.SnmpInfo()
 		require.Equal(t, uint64(2), snmp.Count.Load())
 		require.Equal(t, uint64(2), snmp.Inserts.Load())
 
@@ -252,7 +252,7 @@ func TestMultiSublist(t *testing.T) {
 		require.NoError(t, ms.Publish("a", Val))
 		require.True(t, subChan.isDone())
 
-		snmp = ms.Snmp()
+		snmp = ms.SnmpInfo()
 
 		require.Equal(t, uint64(1), snmp.Matches.Load())
 		require.Equal(t, uint64(1), snmp.Count.Load())
@@ -268,15 +268,15 @@ func TestMultiSublist(t *testing.T) {
 			require.Fail(t, "unexpected value", v.Val())
 		default:
 		}
-		snmp = ms.Snmp()
+		snmp = ms.SnmpInfo()
 		require.Equal(t, uint64(2), snmp.Matches.Load())
 
 	})
 
 	t.Run("slow", func(t *testing.T) {
-		var retChan = make(chan Param[int], 1)
+		var retChan = make(chan Var[int], 1)
 		subChan := NewSubs("a", Chan(retChan))
-		var ms = NewMultiSublist(1)
+		var ms = NewMultiBus(1)
 		require.NoError(t, ms.Subscribe(subChan))
 		require.NoError(t, ms.Publish("a", 1))
 		err := ms.Publish("a", 1)
@@ -285,14 +285,14 @@ func TestMultiSublist(t *testing.T) {
 	})
 
 	t.Run("Remove", func(t *testing.T) {
-		ms := NewMultiSublist(4)
+		ms := NewMultiBus(4)
 		const SubNum = 1000
 		var allSubs = make([]*Subscription, 0, SubNum)
 
 		// generate random subject
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-		emptyCb := func(p Param[int]) {}
+		emptyCb := func(p Var[int]) {}
 
 		for i := 0; i < SubNum; i++ {
 			sub := NewSubs(fmt.Sprintf("%d.%d", i, r.Intn(SubNum)),
@@ -300,17 +300,17 @@ func TestMultiSublist(t *testing.T) {
 			require.NoError(t, ms.Subscribe(sub))
 			allSubs = append(allSubs, sub)
 		}
-		snmp := ms.Snmp()
+		snmp := ms.SnmpInfo()
 		require.Equal(t, uint64(SubNum), snmp.Count.Load())
 
-		require.NoError(t, ms.Remove(allSubs[0]))
-		snmp = ms.Snmp()
+		require.NoError(t, ms.Unsubscribe(allSubs[0]))
+		snmp = ms.SnmpInfo()
 		require.Equal(t, uint64(SubNum-1), snmp.Count.Load())
 		require.Equal(t, uint64(1), snmp.Removes.Load())
 
-		removeErr := ms.Remove(allSubs...)
+		removeErr := ms.UnsubscribeBatch(allSubs)
 		require.ErrorIs(t, removeErr, ErrNotFound)
-		snmp = ms.Snmp()
+		snmp = ms.SnmpInfo()
 		require.Equal(t, uint64(0), snmp.Count.Load())
 		require.Equal(t, uint64(SubNum), snmp.Removes.Load())
 	})
@@ -325,10 +325,10 @@ func TestParallel(t *testing.T) {
 		)
 		wg.Add(Parallel)
 
-		ml := NewMultiSublist(5)
+		ml := NewMultiBus(5)
 
 		var total atomic.Int64
-		emptyCb := func(p Param[int]) {
+		emptyCb := func(p Var[int]) {
 			total.Add(int64(p.Val()))
 		}
 
@@ -344,7 +344,7 @@ func TestParallel(t *testing.T) {
 
 		var chanWait sync.WaitGroup
 
-		var receive = make(chan Param[int], Parallel*Multi)
+		var receive = make(chan Var[int], Parallel*Multi)
 
 		for i := 0; i < Parallel; i++ {
 			go func(i int) {
@@ -376,7 +376,7 @@ func TestParallel(t *testing.T) {
 		close(subsChan)
 		<-addEnd
 
-		snmp := ml.Snmp()
+		snmp := ml.SnmpInfo()
 		require.Equal(t, uint64(Parallel), snmp.Count.Load())
 
 		chanWait.Add(1)
@@ -414,14 +414,14 @@ func TestParallel(t *testing.T) {
 
 func BenchmarkMS(b *testing.B) {
 	var subj = "aaaaa.bbbbb.ccccc.ddddd.eeeee.fffff.ggggg.hhhhh"
-	var emptyCb = func(p Param[int]) {}
-	var emptyChan = make(chan Param[int], 1)
+	var emptyCb = func(p Var[int]) {}
+	var emptyChan = make(chan Var[int], 1)
 
 	_ = emptyCb
 	_ = emptyChan
 
 	b.Run("sub", func(b *testing.B) {
-		ms := NewMultiSublist(8)
+		ms := NewMultiBus(8)
 		b.RunParallel(func(p *testing.PB) {
 			for p.Next() {
 				ms.Subscribe(NewSubs(subj, Callback(emptyCb)))
@@ -434,7 +434,7 @@ func BenchmarkMS(b *testing.B) {
 	const ElementNum = 100
 
 	b.Run("pub cb", func(b *testing.B) {
-		ms := NewMultiSublist(8)
+		ms := NewMultiBus(8)
 		for i := 0; i < ElementNum; i++ {
 			ms.Subscribe(NewSubs(subj, Callback(emptyCb)))
 		}
@@ -448,7 +448,7 @@ func BenchmarkMS(b *testing.B) {
 	b.ResetTimer()
 
 	b.Run("pub chan", func(b *testing.B) {
-		ms := NewMultiSublist(8)
+		ms := NewMultiBus(8)
 		for i := 0; i < ElementNum; i++ {
 			ms.Subscribe(NewSubs(subj, Chan(emptyChan)))
 		}
