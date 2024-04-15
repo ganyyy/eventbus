@@ -74,9 +74,9 @@ func main() {
 	defer bus.Unsubscribe(subCallback)
 
 	var wg sync.WaitGroup
-	wg.Add(100)
+	wg.Add(Num)
 
-	for i := range 100 {
+	for i := range Num {
 		go func(i int) {
 			bus.Publish(Topic, i)
 			wg.Done()
