@@ -70,9 +70,9 @@ func TestSet(t *testing.T) {
 			})
 		}
 
-		// ts(NewSet[int](0))
+		ts(NewSet[int](0))
 		ts(NewSliceSet[int]())
-		// ts(NewMixSet[int]())
+		ts(NewMixSet[int]())
 	})
 
 	t.Run("MixSet", func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestSet(t *testing.T) {
 		var sliceType = reflect.TypeOf((*SliceSet[int])(nil))
 
 		checkType := func(tt reflect.Type) {
-			sType := reflect.TypeOf(s.ISet)
+			sType := reflect.TypeOf(s.ITransformSet)
 			require.Equal(t, sType, tt)
 		}
 
@@ -92,7 +92,8 @@ func TestSet(t *testing.T) {
 		}
 
 		checkType(sliceType)
-		s.add(mixSetMaxSliceSize - 1)
+		require.Equal(t, mixSetMaxSliceSize-1, s.Len())
+		s.Add(mixSetMaxSliceSize - 1)
 		checkType(setType)
 		require.Equal(t, mixSetMaxSliceSize, s.Len())
 
@@ -105,4 +106,32 @@ func TestSet(t *testing.T) {
 		checkType(sliceType)
 		require.Equal(t, mixSetMinMapSize, s.Len())
 	})
+}
+
+func BenchmarkTransform(b *testing.B) {
+	b.Run("Slice2Set", func(b *testing.B) {
+		var s = NewSliceSet[int]()
+
+		for i := 0; i < mixSetMaxSliceSize; i++ {
+			s.Add(i)
+		}
+
+		for i := 0; i < b.N; i++ {
+			_ = s.Transform()
+		}
+	})
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	b.Run("Set2Slice", func(b *testing.B) {
+		var s = NewSet[int](mixSetMinMapSize)
+		for i := 0; i < mixSetMinMapSize; i++ {
+			s.Add(i)
+		}
+
+		for i := 0; i < b.N; i++ {
+			_ = s.Transform()
+		}
+	})
+	b.ReportAllocs()
 }

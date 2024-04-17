@@ -86,6 +86,18 @@ func (s Set[T]) Range(f func(e T) bool) {
 	}
 }
 
+// Transform transforms the set to a slice if the size is less than mixSetMinMapSize.
+func (s Set[T]) Transform() ITransformSet[T] {
+	if len(s) > mixSetMinMapSize {
+		return s
+	}
+	set := NewSliceSet[T]()
+	for k := range s {
+		set.Add(k)
+	}
+	return set
+}
+
 type SliceSet[T comparable] struct {
 	cache    [mixSetMaxSliceSize]T
 	elements []T
@@ -169,8 +181,18 @@ func (s *SliceSet[T]) Range(f func(e T) bool) {
 	}
 }
 
+// transform transforms the set to a map if the size is greater than mixSetMaxSliceSize.
+func (s *SliceSet[T]) Transform() ITransformSet[T] {
+	if s.Len() < mixSetMaxSliceSize {
+		return s
+	}
+	set := NewSet[T](uint(s.Len()))
+	set.Add(s.elements...)
+	return set
+}
+
 // MixSet is a set that uses a slice for small sets and a map for large sets.
-type MixSet[T comparable] struct{ ISet[T] }
+type MixSet[T comparable] struct{ ITransformSet[T] }
 
 // NewMixSet creates a new set.
 func NewMixSet[T comparable]() *MixSet[T] {
@@ -180,35 +202,14 @@ func NewMixSet[T comparable]() *MixSet[T] {
 
 // InitMixSet creates a new set with an initial capacity.
 func InitMixSet[T comparable]() MixSet[T] {
-	return MixSet[T]{ISet: NewSliceSet[T]()}
+	return MixSet[T]{ITransformSet: NewSliceSet[T]()}
 }
 
-// transform transforms the set to a map if the size is greater than mixSetMaxSliceSize.
+// Transform transforms the set to a map if the size is greater than mixSetMaxSliceSize.
 // or to a slice if the size is less than mixSetMinMapSize.
-func (s *MixSet[T]) transform() {
-	old := s.ISet
-	var exchange bool
-	switch t := old.(type) {
-	case *SliceSet[T]:
-		if t.Len() >= mixSetMaxSliceSize {
-			s.ISet = NewSet[T](uint(t.Len()))
-			exchange = true
-		}
-	case Set[T]:
-		if t.Len() <= mixSetMinMapSize {
-			s.ISet = NewSliceSet[T]()
-			exchange = true
-		}
-	default:
-		panic("invalid set type")
-	}
-
-	if exchange {
-		old.Range(func(e T) bool {
-			s.ISet.Add(e)
-			return true
-		})
-	}
+func (s *MixSet[T]) Transform() ITransformSet[T] {
+	s.ITransformSet = s.ITransformSet.Transform()
+	return s
 }
 
 // Add adds an element to the set.
@@ -220,8 +221,8 @@ func (s *MixSet[T]) Add(e ...T) {
 
 // add adds an element to the set.
 func (s *MixSet[T]) add(e T) {
-	s.ISet.Add(e)
-	s.transform()
+	s.ITransformSet.Add(e)
+	s.Transform()
 }
 
 // Remove removes an element from the set.
@@ -233,10 +234,11 @@ func (s *MixSet[T]) Remove(e ...T) {
 
 // remove removes an element from the set.
 func (s *MixSet[T]) remove(e T) {
-	s.ISet.Remove(e)
-	s.transform()
+	s.ITransformSet.Remove(e)
+	s.Transform()
 }
 
+// ISet is a set interface.
 type ISet[T comparable] interface {
 	Add(e ...T)
 	Remove(e ...T)
@@ -245,6 +247,12 @@ type ISet[T comparable] interface {
 	AppendToSlice(slice []T) []T
 	Clear()
 	Range(f func(e T) bool)
+}
+
+// ITransformSet is a set interface that can transform to another set.
+type ITransformSet[T comparable] interface {
+	ISet[T]
+	Transform() ITransformSet[T]
 }
 
 var (
