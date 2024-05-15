@@ -18,6 +18,7 @@ limitations under the License.
 package eventbus
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -38,7 +39,7 @@ func TestSublist(t *testing.T) {
 	t.Run("subs", func(t *testing.T) {
 		var ret atomic.Int64
 
-		s := CallbackSubs("a", func(p Var[int]) {
+		s := CallbackSubs("a", func(p Msg[int]) {
 			ret.Add(int64(p.Val()))
 		}, Once())
 		var wg sync.WaitGroup
@@ -47,7 +48,7 @@ func TestSublist(t *testing.T) {
 
 		calc := func() {
 			defer wg.Done()
-			s.call(1)
+			s.call(1, nil)
 		}
 
 		for i := 0; i < P; i++ {
@@ -211,14 +212,62 @@ func TestSublist(t *testing.T) {
 		require.Equal(t, uint64(NUM), sublist.Removes.Load())
 
 	})
+
+	t.Run("Request", func(t *testing.T) {
+		sublist := NewBus()
+
+		const subject = "a"
+
+		var count int
+		sub1 := CallbackSubs(subject, func(v Msg[int]) {
+			count++
+			require.Equal(t, v.Reply(v.Val()+1), count == 1)
+		})
+		sub2 := CallbackSubs(subject, func(v Msg[int]) {
+			count++
+			require.Equal(t, v.Reply(v.Val()+1), count == 1)
+		})
+
+		require.NoError(t, sublist.Subscribe(sub1))
+		require.NoError(t, sublist.Subscribe(sub2))
+
+		var reply = NewReply[int]()
+		require.NoError(t, sublist.Request(subject, 1, reply))
+
+		resp, valid := reply.Resp(context.Background())
+		require.True(t, valid)
+		require.Equal(t, 2, resp.Val())
+
+		require.NoError(t, sublist.Publish(subject, 1))
+		require.Equal(t, 4, count)
+	})
+
+	t.Run("RequestTimeout", func(t *testing.T) {
+		sublist := NewBus()
+
+		const subject = "a"
+
+		sub1 := CallbackSubs(subject, func(Msg[int]) {})
+
+		require.NoError(t, sublist.Subscribe(sub1))
+
+		var reply = NewReply[int]()
+		require.NoError(t, sublist.Request(subject, 1, reply))
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*10)
+		defer cancel()
+		resp, valid := reply.Resp(ctx)
+		require.False(t, valid)
+		require.Zero(t, resp.Val())
+	})
 }
 
 func TestMultiSublist(t *testing.T) {
 
 	t.Run("Subscribe", func(t *testing.T) {
 
-		emptyCallback := Any[int, func(Var[int])](nil)
-		emptyChan := Any[int, chan Var[int]](nil)
+		emptyCallback := Any[int, func(Msg[int])](nil)
+		emptyChan := Any[int, chan Msg[int]](nil)
 
 		var ms = NewMultiBus(1)
 		require.NoError(t, ms.Subscribe(NewSubs("a", emptyCallback)))
@@ -232,11 +281,11 @@ func TestMultiSublist(t *testing.T) {
 		var ms = NewMultiBus(1)
 
 		var cbRet int
-		var subCB = NewSubs("a", Callback(func(p Var[int]) {
+		var subCB = NewSubs("a", Callback(func(p Msg[int]) {
 			cbRet = p.Val()
 		}))
 
-		var retChan = make(chan Var[int], 1)
+		var retChan = make(chan Msg[int], 1)
 		var subChan = NewSubs("a", Chan(retChan), Once())
 
 		require.NoError(t, ms.Subscribe(subCB))
@@ -295,7 +344,7 @@ func TestMultiSublist(t *testing.T) {
 		// generate random subject
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-		emptyCb := func(p Var[int]) {}
+		emptyCb := func(p Msg[int]) {}
 
 		for i := 0; i < SubNum; i++ {
 			sub := NewSubs(fmt.Sprintf("%d.%d", i, r.Intn(SubNum)),
@@ -331,7 +380,7 @@ func TestParallel(t *testing.T) {
 		ml := NewMultiBus(5)
 
 		var total atomic.Int64
-		emptyCb := func(p Var[int]) {
+		emptyCb := func(p Msg[int]) {
 			total.Add(int64(p.Val()))
 		}
 
@@ -347,7 +396,7 @@ func TestParallel(t *testing.T) {
 
 		var chanWait sync.WaitGroup
 
-		var receive = make(chan Var[int], Parallel*Multi)
+		var receive = make(chan Msg[int], Parallel*Multi)
 
 		for i := 0; i < Parallel; i++ {
 			go func(i int) {
@@ -417,8 +466,8 @@ func TestParallel(t *testing.T) {
 
 func BenchmarkMS(b *testing.B) {
 	var subj = "aaaaa.bbbbb.ccccc.ddddd.eeeee.fffff.ggggg.hhhhh"
-	var emptyCb = func(p Var[int]) {}
-	var emptyChan = make(chan Var[int], 1)
+	var emptyCb = func(p Msg[int]) {}
+	var emptyChan = make(chan Msg[int], 1)
 
 	_ = emptyCb
 	_ = emptyChan

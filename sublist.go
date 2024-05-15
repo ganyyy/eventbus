@@ -143,11 +143,11 @@ func (s *Subscription) split(cache []string) ([]string, bool) {
 }
 
 // call
-func (s *Subscription) call(param any) bool {
+func (s *Subscription) call(param any, reply replyFunc) bool {
 	if !s.canCall() {
 		return false
 	}
-	return s.sub.run(param)
+	return s.sub.run(param, reply)
 }
 
 // SplitSubject splits the subject into tokens.
@@ -260,6 +260,11 @@ func (s *Sublist) removeFromNodeInLock(n *Node, sub *Subscription) (found, last 
 
 // Publish
 func (s *Sublist) Publish(subject string, param any) (err error) {
+	return s.Request(subject, param, nil)
+}
+
+// Request
+func (s *Sublist) Request(subject string, param any, reply IReply) (err error) {
 	if s == nil {
 		return ErrSublistNil
 	}
@@ -269,8 +274,12 @@ func (s *Sublist) Publish(subject string, param any) (err error) {
 	var slowConsumeCount int
 	ret := s.match(subject)
 	var removeOnces = ret.psubs[:0]
+	var r replyFunc
+	if reply != nil {
+		r = reply.reply
+	}
 	for _, sub := range ret.psubs {
-		success := sub.call(param)
+		success := sub.call(param, r)
 		isOnce := sub.isOnce()
 		if success && isOnce {
 			removeOnces = append(removeOnces, sub)
@@ -508,6 +517,11 @@ func (m *MultiSublist) Publish(subject string, param any) error {
 	return m.getSublist(subject).Publish(subject, param)
 }
 
+// Request
+func (m *MultiSublist) Request(subject string, param any, reply IReply) error {
+	return m.getSublist(subject).Request(subject, param, reply)
+}
+
 // Subscribe
 func (m *MultiSublist) Subscribe(sub *Subscription) error {
 	return m.getSublist(sub.Subject()).Subscribe(sub)
@@ -549,6 +563,7 @@ var Default = NewMultiBus(32)
 type ISublist interface {
 	Subscribe(sub *Subscription) error
 	Publish(subject string, param any) error
+	Request(subject string, param any, reply IReply) error
 
 	Unsubscribe(sub *Subscription) error
 	UnsubscribeBatch(subs []*Subscription) error

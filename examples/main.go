@@ -17,23 +17,36 @@ func main() {
 	)
 
 	var total1, total2 atomic.Int64
-	var subCallback = eventbus.NewSubs(
+	var subCallback = eventbus.CallbackSubs(
 		Topic,
-		eventbus.Callback(func(p eventbus.Var[int]) {
+		func(p eventbus.Msg[int]) {
 			total1.Add(int64(p.Val()))
-		}),
+		},
 	)
 
-	var notifyChannel = make(chan eventbus.Var[int], Num)
-	var subChan = eventbus.NewSubs(
+	var notifyChannel, subChan = eventbus.ChanSubs[int](
 		Topic,
-		eventbus.Chan(notifyChannel),
+		Num,
 	)
 	var stopNotify = make(chan struct{})
+	var stopReceive = make(chan struct{})
 
 	go func() {
-		for val := range notifyChannel {
-			total2.Add(int64(val.Val()))
+	end:
+		for {
+			// consume all
+			select {
+			case val := <-notifyChannel:
+				total2.Add(int64(val.Val()))
+			case <-stopReceive:
+				select {
+				case val := <-notifyChannel:
+					total2.Add(int64(val.Val()))
+					continue end
+				default:
+				}
+				break end
+			}
 		}
 		close(stopNotify)
 	}()
@@ -55,7 +68,7 @@ func main() {
 	}
 
 	wg.Wait()
-	close(notifyChannel)
+	close(stopReceive)
 	<-stopNotify
 
 	println(total1.Load(), total2.Load())
