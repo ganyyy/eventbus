@@ -27,7 +27,7 @@ type ICall interface{ run(any) (success bool) }
 
 type callback[T any] func(Var[T])
 
-type channel[T any] chan Var[T]
+type channel[T any] chan<- Var[T]
 
 // run
 func (s callback[T]) run(v any) bool {
@@ -85,8 +85,14 @@ func Once() Opt { return (*subsOption).setOnce }
 func Queue() Opt { return (*subsOption).setQueue }
 
 // Chan creates a new subscribe with a channel
-func Chan[T any](notify chan Var[T]) ICall {
+func Chan[T any](notify chan<- Var[T]) ICall {
 	return channel[T](notify)
+}
+
+// MakeChan
+func MakeChan[T any](capacity int) (tx chan<- Var[T], rx <-chan Var[T]) {
+	ch := make(chan Var[T], capacity)
+	return ch, ch
 }
 
 // Callback creates a new subscribe with a callback
@@ -103,4 +109,16 @@ func Any[T any, F chan Var[T] | func(Var[T])](inner F) ICall {
 	default:
 		panic("invalid inner")
 	}
+}
+
+// CallbackSubs
+func CallbackSubs[T any](topic string, cb func(Var[T]), opts ...Opt) *Subscription {
+	return NewSubs(topic, Callback(cb), opts...)
+}
+
+// ChanSubs
+func ChanSubs[T any](topic string, capacity int, opts ...Opt) (rx <-chan Var[T], sub *Subscription) {
+	tx, rx := MakeChan[T](capacity)
+	sub = NewSubs(topic, Chan(tx), opts...)
+	return rx, sub
 }

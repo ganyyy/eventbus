@@ -38,9 +38,9 @@ func TestSublist(t *testing.T) {
 	t.Run("subs", func(t *testing.T) {
 		var ret atomic.Int64
 
-		var s = NewSubs("a", Callback(func(p Var[int]) {
+		s := CallbackSubs("a", func(p Var[int]) {
 			ret.Add(int64(p.Val()))
-		}), Once())
+		}, Once())
 		var wg sync.WaitGroup
 		const P = 10
 		wg.Add(P)
@@ -274,14 +274,17 @@ func TestMultiSublist(t *testing.T) {
 	})
 
 	t.Run("slow", func(t *testing.T) {
-		var retChan = make(chan Var[int], 1)
-		subChan := NewSubs("a", Chan(retChan))
+
+		retChan, subChan := ChanSubs[int]("a", 1)
+
 		var ms = NewMultiBus(1)
 		require.NoError(t, ms.Subscribe(subChan))
 		require.NoError(t, ms.Publish("a", 1))
 		err := ms.Publish("a", 1)
 		require.ErrorIs(t, err, ErrSlowConsumer)
 		t.Logf("error: %v", err)
+		ret := <-retChan
+		require.Equal(t, 1, ret.Val())
 	})
 
 	t.Run("Remove", func(t *testing.T) {
