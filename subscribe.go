@@ -127,15 +127,21 @@ func (v Var[T]) Raw() any { return v.v }
 type Opt func(*subsOption)
 
 type subsOption struct {
-	once  bool // once subscribe
-	queue bool // TODO queue subscribe
+	once  bool   // once subscribe
+	queue string // queue subscribe
 }
 
 // setOnce
 func (o *subsOption) setOnce() { o.once = true }
 
+// isOnce
+func (o *subsOption) isOnce() bool { return o.once }
+
 // setQueue
-func (o *subsOption) setQueue() { o.queue = true }
+func (o *subsOption) setQueue(group string) { o.queue = group }
+
+// isQueue
+func (o *subsOption) isQueue() bool { return o.queue != "" }
 
 // apply
 func (o *subsOption) apply(opts ...Opt) {
@@ -148,7 +154,11 @@ func (o *subsOption) apply(opts ...Opt) {
 func Once() Opt { return (*subsOption).setOnce }
 
 // Queue
-func Queue() Opt { return (*subsOption).setQueue }
+func Queue(queue string) Opt {
+	return func(so *subsOption) {
+		so.setQueue(queue)
+	}
+}
 
 // Chan creates a new subscribe with a channel
 func Chan[T any](notify chan<- Msg[T]) ICall {

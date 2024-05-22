@@ -28,9 +28,10 @@ type Level struct {
 }
 
 type Node struct {
-	Next  *Level              // next level
-	Psubs ISet[*Subscription] // original set
-	Plist []*Subscription     // cache list
+	Next  *Level                         // next level
+	Psubs ISet[*Subscription]            // original set
+	Qsubs map[string]ISet[*Subscription] // queue set
+	Plist []*Subscription                // cache list
 }
 
 func NewNode() *Node {

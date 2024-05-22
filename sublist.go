@@ -34,24 +34,22 @@ const (
 	StackCacheSize = 32  // normal stack cache size
 )
 
-var sublistResultPool = sync.Pool{
-	New: func() any {
+var sublistResultPool = NewPool(
+	func() *sublistResult {
 		return &sublistResult{}
 	},
-}
-
-func getResult() *sublistResult {
-	return sublistResultPool.Get().(*sublistResult)
-}
-
-func putResult(r *sublistResult) {
-	clear(r.psubs)
-	r.psubs = r.psubs[:0]
-	sublistResultPool.Put(r)
-}
+	func(r *sublistResult) bool {
+		clear(r.psubs)
+		r.psubs = r.psubs[:0]
+		clear(r.qsubs)
+		r.qsubs = r.qsubs[:0]
+		return true
+	},
+)
 
 type sublistResult struct {
 	psubs []*Subscription
+	qsubs [][]*Subscription
 }
 
 var emptyResult = &sublistResult{}
@@ -104,9 +102,6 @@ func (s *Subscription) Subject() string {
 	}
 	return s.subject
 }
-
-// isOnce returns true if the subscribe is once
-func (s *Subscription) isOnce() bool { return s.once }
 
 // canCall returns true if the subscribe can be called
 func (s *Subscription) canCall() bool {
@@ -220,16 +215,30 @@ func (s *Sublist) Subscribe(sub *Subscription) error {
 		level = n.Next
 	}
 
-	n.Psubs.Add(sub)
+	if !sub.isQueue() {
+		n.Psubs.Add(sub)
 
-	if n.Plist != nil {
-		// when the number of subscriptions is greater than the minimum quick cache value,
-		// add the subscription to the quick cache
-		n.Plist = append(n.Plist, sub)
-	} else if n.Psubs.Len() > PListCacheMin {
-		// build a quick cache when the number of subscriptions
-		// is greater than the minimum quick cache value
-		n.Plist = n.Psubs.AppendToSlice(nil)
+		if n.Plist != nil {
+			// when the number of subscriptions is greater than the minimum quick cache value,
+			// add the subscription to the quick cache
+			n.Plist = append(n.Plist, sub)
+		} else if n.Psubs.Len() > PListCacheMin {
+			// build a quick cache when the number of subscriptions
+			// is greater than the minimum quick cache value
+			n.Plist = n.Psubs.AppendToSlice(nil)
+		}
+	} else {
+		if n.Qsubs == nil {
+			n.Qsubs = make(map[string]ISet[*Subscription])
+		}
+		queueName := sub.queue
+		// add the subscription to the queue set
+		subs, ok := n.Qsubs[queueName]
+		if !ok {
+			subs = NewMixSet[*Subscription]()
+			n.Qsubs[queueName] = subs
+		}
+		subs.Add(sub)
 	}
 
 	s.Count.Add(1)
@@ -242,19 +251,40 @@ func (s *Sublist) Subscribe(sub *Subscription) error {
 }
 
 // removeFromNodeInLock removes the subscription from the node.
+// returns found and last
+// found: true if the subscription is found in the node
+// last: true if the node is empty after removing the subscription
 func (s *Sublist) removeFromNodeInLock(n *Node, sub *Subscription) (found, last bool) {
 	if n == nil {
 		return false, true
 	}
-	found = n.Psubs.Contains(sub)
-	if !found {
+	if !sub.isQueue() {
+		// process the normal subscriptions
+		found = n.Psubs.Contains(sub)
+		if !found {
+			return
+		}
+		n.Psubs.Remove(sub)
+		if n.Plist != nil {
+			n.Plist = nil
+		}
+		last = n.IsEmpty()
 		return
+	} else {
+		// process the queue subscriptions
+		queueSubs, ok := n.Qsubs[sub.queue]
+		if !ok {
+			return
+		}
+		found = queueSubs.Contains(sub)
+		if found {
+			queueSubs.Remove(sub)
+		}
+		last = queueSubs.Len() == 0
+		if last {
+			delete(n.Qsubs, sub.queue)
+		}
 	}
-	n.Psubs.Remove(sub)
-	if n.Plist != nil {
-		n.Plist = nil
-	}
-	last = n.IsEmpty()
 	return
 }
 
@@ -278,8 +308,9 @@ func (s *Sublist) Request(subject string, param any, reply IReply) (err error) {
 	if reply != nil {
 		r = reply.reply
 	}
-	for _, sub := range ret.psubs {
-		success := sub.call(param, r)
+
+	var call = func(sub *Subscription, param any, reply replyFunc) bool {
+		success := sub.call(param, reply)
 		isOnce := sub.isOnce()
 		if success && isOnce {
 			removeOnces = append(removeOnces, sub)
@@ -289,11 +320,32 @@ func (s *Sublist) Request(subject string, param any, reply IReply) (err error) {
 				slowConsumeCount++
 			}
 		}
+		return success
 	}
+
+	for _, sub := range ret.psubs {
+		call(sub, param, r)
+	}
+	// process the queue subscriptions
+	for _, subs := range ret.qsubs {
+		length := len(subs)
+		if length == 0 {
+			continue
+		}
+		// maybe should shuffle the queue subscriptions?
+		// in the queue mode, only one subscription is executed
+		var start = randIdx(length)
+		for i := range len(subs) {
+			if call(subs[(start+i)%length], param, r) {
+				break
+			}
+		}
+	}
+
 	if len(removeOnces) > 0 {
 		s.UnsubscribeBatch(removeOnces)
 	}
-	putResult(ret)
+	sublistResultPool.Put(ret)
 	if slowConsumeCount > 0 {
 		err = slowConsumerErr{count: slowConsumeCount}
 	}
@@ -451,7 +503,7 @@ func (s *Sublist) match(subject string) *sublistResult {
 	}
 
 	s.Matches.Add(1)
-	var ret = getResult()
+	var ret = sublistResultPool.Get()
 
 	s.lock.RLock()
 	defer s.lock.RUnlock()
@@ -460,12 +512,45 @@ func (s *Sublist) match(subject string) *sublistResult {
 	return ret
 }
 
+const (
+	insertNewPos = -1
+)
+
+// findInsertQueueIndex finds the index to insert the subscription.
+func (s *sublistResult) findInsertQueueIndex(queueName string) int {
+	if queueName == "" {
+		return insertNewPos
+	}
+	for idx, subs := range s.qsubs {
+		if len(subs) == 0 {
+			continue
+		}
+		if subs[0].queue == queueName {
+			return idx
+		}
+	}
+	return insertNewPos
+}
+
 // add adds the subscription to the result.
 func (s *sublistResult) add(node *Node) {
 	if node.Plist != nil {
 		s.psubs = append(s.psubs, node.Plist...)
 	} else {
 		s.psubs = node.Psubs.AppendToSlice(s.psubs)
+	}
+
+	// process the queue subscriptions
+	for queueName, subs := range node.Qsubs {
+		if subs.Len() == 0 {
+			continue
+		}
+		// TODO queue weight?
+		if idx := s.findInsertQueueIndex(queueName); idx == insertNewPos {
+			s.qsubs = append(s.qsubs, subs.AppendToSlice(nil))
+		} else {
+			s.qsubs[idx] = subs.AppendToSlice(s.qsubs[idx])
+		}
 	}
 }
 

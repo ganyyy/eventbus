@@ -368,6 +368,91 @@ func TestMultiSublist(t *testing.T) {
 	})
 }
 
+func TestQueue(t *testing.T) {
+	t.Run("Queue", func(t *testing.T) {
+		var ms = NewBus()
+		const subj = "a"
+
+		var ret atomic.Int64
+		mkQueueSub := func(queue string) *Subscription {
+			return NewSubs(subj, Callback(func(p Msg[int]) {
+				ret.Add(int64(p.Val()))
+			}), Queue(queue))
+		}
+
+		const N = 10
+		allQueue := []string{"a", "b", "c"}
+		var queueSubs []*Subscription
+		for _, q := range append([]string{""}, allQueue...) {
+			for range N {
+				sub := mkQueueSub(q)
+				if sub.isQueue() {
+					queueSubs = append(queueSubs, sub)
+				}
+				require.NoError(t, ms.Subscribe(sub))
+			}
+		}
+		require.NoError(t, ms.Publish(subj, 1))
+		// the total ret is N + 3
+		require.Equal(t, int64(N+len(allQueue)), ret.Load())
+		// the total subs is N * 4
+		require.Equal(t, uint64(N*(len(allQueue)+1)), ms.SnmpInfo().Count.Load())
+
+		shuffleSlices(queueSubs)
+
+		require.ErrorIs(t, ErrNotFound, ms.Unsubscribe(mkQueueSub("d")))
+		require.ErrorIs(t, ErrNotFound, ms.Unsubscribe(mkQueueSub("a")))
+
+		for _, q := range queueSubs {
+			require.NoError(t, ms.Unsubscribe(q))
+		}
+	})
+
+	t.Run("Probability", func(t *testing.T) {
+		const N = 100
+		var count [N]atomic.Uint64
+		var stat [N]uint64
+
+		var bus = NewBus()
+
+		const (
+			subj  = "a"
+			queue = "q"
+		)
+
+		mkQueue := func(idx int) *Subscription {
+			return NewSubs(subj, Callback(func(p Msg[int]) {
+				count[idx].Add(1)
+			}), Queue(queue))
+		}
+
+		for i := range N {
+			require.NoError(t, bus.Subscribe(mkQueue(i)))
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(N)
+
+		for i := range N {
+			go func(i int) {
+				defer wg.Done()
+				for j := 0; j < N; j++ {
+					require.NoError(t, bus.Publish(subj, 1))
+				}
+			}(i)
+		}
+		wg.Wait()
+
+		for i := range N {
+			stat[i] = count[i].Load()
+		}
+
+		for i := 0; i < N; i += 10 {
+			t.Logf("%2d-%3d %v", i, i+10, stat[i:i+10])
+		}
+	})
+}
+
 func TestParallel(t *testing.T) {
 	var tt = func(t *testing.T) {
 		var wg sync.WaitGroup

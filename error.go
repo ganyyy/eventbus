@@ -55,5 +55,5 @@ func (e slowConsumerErr) Error() string {
 
 // Is
 func (e slowConsumerErr) Is(target error) bool {
-	return target == ErrSlowConsumer
+	return errors.Is(target, ErrSlowConsumer)
 }
