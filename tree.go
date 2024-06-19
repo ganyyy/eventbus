@@ -25,6 +25,8 @@ const (
 type Level struct {
 	Nodes map[string]*Node //
 	// TODO
+	Pwc *Node // wildcard node. *
+	Fwc *Node // full wildcard node. >
 }
 
 type Node struct {
@@ -44,7 +46,7 @@ func NewNode() *Node {
 type LevelCache struct {
 	Level *Level
 	Node  *Node
-	Topic string
+	Token string
 }
 
 func NewLevel() *Level {
@@ -55,25 +57,57 @@ func NewLevel() *Level {
 
 // NumNodes
 func (l *Level) NumNodes() int {
-	return len(l.Nodes)
+	return len(l.Nodes) + addNodeNum(l.Fwc) + addNodeNum(l.Pwc)
+}
+
+func addNodeNum(n *Node) int {
+	if n != nil {
+		return 1
+	}
+	return 0
 }
 
 // PruneNode
-func (l *Level) PruneNode(topic string) {
-	delete(l.Nodes, topic)
+func (l *Level) PruneNode(n *Node, token string) {
+	if n == nil {
+		return
+	}
+	if n == l.Fwc {
+		l.Fwc = nil
+	} else if n == l.Pwc {
+		l.Pwc = nil
+	} else {
+		delete(l.Nodes, token)
+	}
 }
 
 // IsEmpty
 func (n *Node) IsEmpty() bool {
-	return n.Psubs.Len() == 0 && (n.Next == nil || n.Next.NumNodes() == 0)
+	if n == nil {
+		return true
+	}
+	if n.Psubs.Len() == 0 && len(n.Qsubs) == 0 {
+		if n.Next == nil || n.Next.NumNodes() == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // MatchLevel
 func MatchLevel(level *Level, tokens []string, ret *sublistResult) {
 	var node *Node
-	for _, token := range tokens {
+	var pwn *Node
+	for idx, token := range tokens {
 		if level == nil {
 			return
+		}
+		if level.Fwc != nil {
+			ret.add(level.Fwc)
+		}
+		if pwn = level.Pwc; pwn != nil {
+			// skip one token for wildcard node
+			MatchLevel(pwn.Next, tokens[idx+1:], ret)
 		}
 		node = level.Nodes[token]
 		if node == nil {
@@ -84,5 +118,8 @@ func MatchLevel(level *Level, tokens []string, ret *sublistResult) {
 	}
 	if node != nil {
 		ret.add(node)
+	}
+	if pwn != nil {
+		ret.add(pwn)
 	}
 }

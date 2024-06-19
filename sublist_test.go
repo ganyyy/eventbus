@@ -382,12 +382,14 @@ func TestQueue(t *testing.T) {
 
 		const N = 10
 		allQueue := []string{"a", "b", "c"}
-		var queueSubs []*Subscription
+		var queueSubs, subs []*Subscription
 		for _, q := range append([]string{""}, allQueue...) {
 			for range N {
 				sub := mkQueueSub(q)
 				if sub.isQueue() {
 					queueSubs = append(queueSubs, sub)
+				} else {
+					subs = append(subs, sub)
 				}
 				require.NoError(t, ms.Subscribe(sub))
 			}
@@ -403,9 +405,17 @@ func TestQueue(t *testing.T) {
 		require.ErrorIs(t, ErrNotFound, ms.Unsubscribe(mkQueueSub("d")))
 		require.ErrorIs(t, ErrNotFound, ms.Unsubscribe(mkQueueSub("a")))
 
+		require.Equal(t, int(1), ms.root.NumNodes())
+
+		for _, sub := range subs {
+			require.NoError(t, ms.Unsubscribe(sub))
+		}
+		require.Equal(t, int(1), ms.root.NumNodes())
+
 		for _, q := range queueSubs {
 			require.NoError(t, ms.Unsubscribe(q))
 		}
+		require.Equal(t, int(0), ms.root.NumNodes())
 	})
 
 	t.Run("Probability", func(t *testing.T) {
@@ -450,6 +460,115 @@ func TestQueue(t *testing.T) {
 		for i := 0; i < N; i += 10 {
 			t.Logf("%2d-%3d %v", i, i+10, stat[i:i+10])
 		}
+	})
+}
+
+func TestWildcard(t *testing.T) {
+	t.Run("subs", func(t *testing.T) {
+		var w1Count, w2Count, w3Count, fCount atomic.Int64
+		wSubs1 := CallbackSubs("time.*.east", func(m Msg[int]) {
+			w1Count.Add(int64(m.Val()))
+		})
+		wSubs2 := CallbackSubs("time.*.west", func(m Msg[int]) {
+			w2Count.Add(int64(m.Val()))
+		})
+		wSubs3 := CallbackSubs("time.*", func(m Msg[int]) {
+			w3Count.Add(int64(m.Val()))
+		})
+		fSubs := CallbackSubs("time.>", func(m Msg[int]) {
+			fCount.Add(int64(m.Val()))
+		})
+
+		errSub := CallbackSubs("time.>.>", func(m Msg[int]) {})
+
+		var ms = NewMultiBus(1)
+		require.ErrorIs(t, ms.Subscribe(errSub), ErrInvalidSubject)
+		require.NoError(t, ms.Subscribe(wSubs1))
+		require.NoError(t, ms.Subscribe(wSubs2))
+		require.NoError(t, ms.Subscribe(wSubs3))
+		require.NoError(t, ms.Subscribe(fSubs))
+
+		require.NoError(t, ms.Publish("time.now.east", 1))
+		require.NoError(t, ms.Publish("time.now.west", 1))
+		require.NoError(t, ms.Publish("time.*", 1))
+		require.NoError(t, ms.Publish("time.>", 1))
+		require.NoError(t, ms.Publish("time.now", 1))
+
+		require.Equal(t, int64(1), w1Count.Load())
+		require.Equal(t, int64(1), w2Count.Load())
+		require.Equal(t, int64(3), w3Count.Load())
+		require.Equal(t, int64(5), fCount.Load())
+	})
+
+	t.Run("unsubs", func(t *testing.T) {
+		var w1Count, fCount atomic.Int64
+		wSubs1 := CallbackSubs("time.*.east", func(m Msg[int]) {
+			w1Count.Add(int64(m.Val()))
+		})
+		fSubs := CallbackSubs("time.>", func(m Msg[int]) {
+			fCount.Add(int64(m.Val()))
+		})
+
+		errSubs1 := CallbackSubs("time.>.>", func(m Msg[int]) {})
+		errSubs2 := CallbackSubs("time.time.time", func(m Msg[int]) {})
+
+		var ms = NewBus()
+		require.NoError(t, ms.Subscribe(wSubs1))
+		require.NoError(t, ms.Subscribe(fSubs))
+
+		require.ErrorIs(t, ms.Unsubscribe(errSubs1), ErrInvalidSubject)
+		require.ErrorIs(t, ms.Unsubscribe(errSubs2), ErrNotFound)
+
+		require.NoError(t, ms.Publish("time.now.east", 1))
+		require.NoError(t, ms.Publish("time.now", 1))
+
+		require.Equal(t, int64(1), w1Count.Load())
+		require.Equal(t, int64(2), fCount.Load())
+
+		require.NoError(t, ms.Unsubscribe(wSubs1))
+		require.NoError(t, ms.Publish("time.now.east", 1))
+		require.Equal(t, int64(1), w1Count.Load())
+		require.Equal(t, int64(3), fCount.Load())
+
+		require.Equal(t, int(1), ms.root.NumNodes())
+
+		require.NoError(t, ms.Unsubscribe(fSubs))
+		require.NoError(t, ms.Publish("time.now", 1))
+		require.Equal(t, int64(1), w1Count.Load())
+		require.Equal(t, int64(3), fCount.Load())
+
+		require.Equal(t, int(0), ms.root.NumNodes())
+
+	})
+
+	t.Run("queue", func(t *testing.T) {
+		var w1Count, fCount, count atomic.Int64
+		wSubs1 := CallbackSubs("time.*.east", func(m Msg[int]) {
+			t.Logf("call in time.*.east")
+			w1Count.Add(int64(m.Val()))
+		}, Queue("a"))
+		fSubs := CallbackSubs("time.>", func(m Msg[int]) {
+			t.Logf("call in time.>")
+			fCount.Add(int64(m.Val()))
+		}, Queue("a"))
+		sub := CallbackSubs("time.now.east", func(m Msg[int]) {
+			t.Logf("call in time.now.east")
+			count.Add(int64(m.Val()))
+		}, Queue("a"))
+
+		var ms = NewBus()
+		require.NoError(t, ms.Subscribe(wSubs1))
+		require.NoError(t, ms.Subscribe(fSubs))
+		require.NoError(t, ms.Subscribe(sub))
+
+		require.NoError(t, ms.Publish("time.now.east", 1))
+
+		require.Equal(t, int64(1), w1Count.Load()+fCount.Load()+count.Load())
+
+		require.NoError(t, ms.Publish("time.now", 1))
+		require.Equal(t, int64(2), w1Count.Load()+fCount.Load()+count.Load())
+		require.True(t, fCount.Load() >= 1)
+
 	})
 }
 

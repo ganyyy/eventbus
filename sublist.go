@@ -27,6 +27,10 @@ import (
 const (
 	TSep  = "."
 	BtSep = '.'
+	Pwc   = "*"
+	BPwc  = '*'
+	Fwc   = ">"
+	BFwc  = '>'
 )
 
 const (
@@ -196,16 +200,49 @@ func (s *Sublist) Subscribe(sub *Subscription) error {
 		return ErrInvalidSubject
 	}
 
-	var n *Node // the node to insert the subscription into
+	var n *Node     // the node to insert the subscription into
+	var hasFwc bool // whether the full wildcard is found
 	s.lock.Lock()
+	defer s.lock.Unlock()
 
 	level := s.root
 
 	for _, token := range tokens {
-		n = level.Nodes[token]
+		lt := len(token)
+		if hasFwc {
+			// the full wildcard is not allowed to be followed by other tokens
+			return ErrInvalidSubject
+		}
+		if lt > 1 {
+			// this is normal token
+			n = level.Nodes[token]
+		} else {
+			switch token[0] {
+			case BPwc: // *
+				n = level.Pwc
+			case BFwc: // >
+				n = level.Fwc
+				hasFwc = true
+			default:
+				n = level.Nodes[token]
+			}
+		}
+
 		if n == nil {
 			n = NewNode()
-			level.Nodes[token] = n
+			if lt > 1 {
+				// this is normal token
+				level.Nodes[token] = n
+			} else {
+				switch token[0] {
+				case BPwc:
+					level.Pwc = n
+				case BFwc:
+					level.Fwc = n
+				default:
+					level.Nodes[token] = n
+				}
+			}
 		}
 
 		if n.Next == nil {
@@ -246,14 +283,13 @@ func (s *Sublist) Subscribe(sub *Subscription) error {
 
 	s.genId.Add(1)
 
-	s.lock.Unlock()
 	return nil
 }
 
 // removeFromNodeInLock removes the subscription from the node.
 // returns found and last
 // found: true if the subscription is found in the node
-// last: true if the node is empty after removing the subscription
+// last: true if remove the last subscription in the subscription list
 func (s *Sublist) removeFromNodeInLock(n *Node, sub *Subscription) (found, last bool) {
 	if n == nil {
 		return false, true
@@ -268,7 +304,7 @@ func (s *Sublist) removeFromNodeInLock(n *Node, sub *Subscription) (found, last 
 		if n.Plist != nil {
 			n.Plist = nil
 		}
-		last = n.IsEmpty()
+		last = n.Psubs.Len() == 0
 		return
 	} else {
 		// process the queue subscriptions
@@ -442,6 +478,7 @@ func (s *Sublist) remove(sub *Subscription, lock bool, updateGen bool) error {
 	}
 
 	var n *Node
+	var hasFwc bool
 	if lock {
 		s.lock.Lock()
 		defer s.lock.Unlock()
@@ -453,12 +490,35 @@ func (s *Sublist) remove(sub *Subscription, lock bool, updateGen bool) error {
 	var levels = levelCache[:0]
 
 	for _, token := range tokens {
-		n = level.Nodes[token]
+
+		lt := len(token)
+		if hasFwc {
+			// the full wildcard is not allowed to be followed by other tokens
+			return ErrInvalidSubject
+		}
+		if level == nil {
+			// the level is nil, the subscription is not found
+			return ErrNotFound
+		}
+		if lt > 1 {
+			n = level.Nodes[token]
+		} else {
+			switch token[0] {
+			case BPwc:
+				n = level.Pwc
+			case BFwc:
+				n = level.Fwc
+				hasFwc = true
+			default:
+				n = level.Nodes[token]
+			}
+		}
+
 		if n != nil {
 			levels = append(levels, LevelCache{
 				Level: level,
 				Node:  n,
-				Topic: token,
+				Token: token,
 			})
 			level = n.Next
 		} else {
@@ -482,9 +542,9 @@ func (s *Sublist) remove(sub *Subscription, lock bool, updateGen bool) error {
 	}
 
 	for idx := len(levels) - 1; idx >= 0; idx-- {
-		lv, node, token := levels[idx].Level, levels[idx].Node, levels[idx].Topic
+		lv, node, token := levels[idx].Level, levels[idx].Node, levels[idx].Token
 		if node.IsEmpty() {
-			lv.PruneNode(token)
+			lv.PruneNode(node, token)
 		}
 	}
 	return nil

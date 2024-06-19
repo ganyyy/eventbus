@@ -36,12 +36,12 @@ type subjectError struct {
 
 // Error
 func (e *subjectError) Error() string {
-	return fmt.Sprintf("sublist: remove %s error: %v", e.subject, e.err)
+	return fmt.Sprintf("subject %s error: %v", e.subject, e.err)
 }
 
 // Is
 func (e *subjectError) Is(target error) bool {
-	return target == e.err
+	return errors.Is(e.err, target)
 }
 
 type slowConsumerErr struct {
