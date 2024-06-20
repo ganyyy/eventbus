@@ -65,6 +65,14 @@ type Snmp struct {
 	Removes atomic.Uint64
 }
 
+// AddTo adds the snmp to the to snmp.
+func (s *Snmp) AddTo(to *Snmp) {
+	to.Matches.Add(s.Matches.Load())
+	to.Count.Add(s.Count.Load())
+	to.Inserts.Add(s.Inserts.Load())
+	to.Removes.Add(s.Removes.Load())
+}
+
 type Sublist struct {
 	lock sync.RWMutex
 
@@ -176,6 +184,16 @@ func ValidSubject(subject string) bool {
 		}
 	}
 	return start < len(subject)
+}
+
+// TotalNodes returns the total number of nodes.
+func (s *Sublist) TotalNodes() int {
+	if s == nil {
+		return 0
+	}
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	return s.root.TotalNodes()
 }
 
 // SnmpInfo
@@ -522,8 +540,7 @@ func (s *Sublist) remove(sub *Subscription, lock bool, updateGen bool) error {
 			})
 			level = n.Next
 		} else {
-			// 找不到, 直接返回
-			return ErrNotFound
+			level = nil
 		}
 	}
 
@@ -614,6 +631,8 @@ func (s *sublistResult) add(node *Node) {
 	}
 }
 
+// MultiSublist is a multi-sublist.
+// NOT-SUPPORT WILD SUBSCRIPTION.
 type MultiSublist struct {
 	sublists []*Sublist
 	seed     maphash.Seed
@@ -636,14 +655,39 @@ func NewMultiBus(length uint) *MultiSublist {
 	}
 }
 
+func (m *MultiSublist) IsSubjectValid(subject string) (isWild bool, valid bool) {
+	var cache [StackCacheSize]string
+	var token []string
+	token, valid = SplitSubject(subject, cache[:0])
+	if !valid {
+		return
+	}
+	for _, t := range token {
+		if t == Pwc || t == Fwc {
+			isWild = true
+			return
+		}
+	}
+	return
+}
+
+// TotalNodes returns the total number of nodes.
+func (m *MultiSublist) TotalNodes() int {
+	if m == nil {
+		return 0
+	}
+	var total int
+	for _, sublist := range m.sublists {
+		total += sublist.TotalNodes()
+	}
+	return total
+}
+
 // SnmpInfo
 func (m *MultiSublist) SnmpInfo() *Snmp {
 	var snmp Snmp
 	for _, sublist := range m.sublists {
-		snmp.Count.Add(sublist.Count.Load())
-		snmp.Inserts.Add(sublist.Inserts.Load())
-		snmp.Removes.Add(sublist.Removes.Load())
-		snmp.Matches.Add(sublist.Matches.Load())
+		sublist.AddTo(&snmp)
 	}
 	return &snmp
 }
@@ -669,6 +713,11 @@ func (m *MultiSublist) Request(subject string, param any, reply IReply) error {
 
 // Subscribe
 func (m *MultiSublist) Subscribe(sub *Subscription) error {
+	if isWild, valid := m.IsSubjectValid(sub.Subject()); !valid {
+		return ErrInvalidSubject
+	} else if isWild {
+		return ErrNotSupport
+	}
 	return m.getSublist(sub.Subject()).Subscribe(sub)
 }
 
@@ -714,6 +763,7 @@ type ISublist interface {
 	UnsubscribeBatch(subs []*Subscription) error
 
 	SnmpInfo() *Snmp
+	TotalNodes() int
 }
 
 var (

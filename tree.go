@@ -55,9 +55,27 @@ func NewLevel() *Level {
 	}
 }
 
-// NumNodes
+// NumNodes returns the number of nodes
 func (l *Level) NumNodes() int {
+	if l == nil {
+		return 0
+	}
 	return len(l.Nodes) + addNodeNum(l.Fwc) + addNodeNum(l.Pwc)
+}
+
+// TotalNodes returns the total number of nodes
+func (l *Level) TotalNodes() int {
+	if l == nil {
+		return 0
+	}
+	var total int
+	// the full wildcard node count is 1 or 0
+	// the partial wildcard node count may be bigger than 1
+	total += l.Fwc.CountSubNodes() + l.Pwc.CountSubNodes()
+	for _, n := range l.Nodes {
+		total += n.CountSubNodes()
+	}
+	return total
 }
 
 func addNodeNum(n *Node) int {
@@ -92,6 +110,14 @@ func (n *Node) IsEmpty() bool {
 		}
 	}
 	return false
+}
+
+// CountSubNodes
+func (n *Node) CountSubNodes() int {
+	if n == nil {
+		return 0
+	}
+	return 1 + n.Next.TotalNodes()
 }
 
 // MatchLevel

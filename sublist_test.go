@@ -214,7 +214,7 @@ func TestSublist(t *testing.T) {
 	})
 
 	t.Run("Request", func(t *testing.T) {
-		sublist := NewBus()
+		sublist := NewMultiBus(4)
 
 		const subject = "a"
 
@@ -260,6 +260,33 @@ func TestSublist(t *testing.T) {
 		require.False(t, valid)
 		require.Zero(t, resp.Val())
 	})
+
+	t.Run("nodes", func(t *testing.T) {
+		testNodeCount(t, NewBus())
+	})
+}
+
+func testNodeCount(t *testing.T, bus ISublist) {
+	makeSub := func(sub string) *Subscription {
+		return NewSubs(sub, nil)
+	}
+
+	a := makeSub("a")
+	b := makeSub("b")
+	ab := makeSub("a.b")
+
+	require.NoError(t, bus.Subscribe(a))
+	require.Equal(t, 1, bus.TotalNodes())
+	require.NoError(t, bus.Subscribe(b))
+	require.Equal(t, 2, bus.TotalNodes())
+	require.NoError(t, bus.Subscribe(ab))
+	require.Equal(t, 3, bus.TotalNodes())
+	require.NoError(t, bus.Unsubscribe(a))
+	require.Equal(t, 3, bus.TotalNodes())
+	require.NoError(t, bus.Unsubscribe(b))
+	require.Equal(t, 2, bus.TotalNodes())
+	require.NoError(t, bus.Unsubscribe(ab))
+	require.Equal(t, 0, bus.TotalNodes())
 }
 
 func TestMultiSublist(t *testing.T) {
@@ -366,11 +393,15 @@ func TestMultiSublist(t *testing.T) {
 		require.Equal(t, uint64(0), snmp.Count.Load())
 		require.Equal(t, uint64(SubNum), snmp.Removes.Load())
 	})
+
+	// t.Run("nodes", func(t *testing.T) {
+	// 	testNodeCount(t, NewMultiBus(4))
+	// })
 }
 
 func TestQueue(t *testing.T) {
 	t.Run("Queue", func(t *testing.T) {
-		var ms = NewBus()
+		var ms = NewMultiBus(4)
 		const subj = "a"
 
 		var ret atomic.Int64
@@ -405,17 +436,17 @@ func TestQueue(t *testing.T) {
 		require.ErrorIs(t, ErrNotFound, ms.Unsubscribe(mkQueueSub("d")))
 		require.ErrorIs(t, ErrNotFound, ms.Unsubscribe(mkQueueSub("a")))
 
-		require.Equal(t, int(1), ms.root.NumNodes())
+		require.Equal(t, int(1), ms.TotalNodes())
 
 		for _, sub := range subs {
 			require.NoError(t, ms.Unsubscribe(sub))
 		}
-		require.Equal(t, int(1), ms.root.NumNodes())
+		require.Equal(t, int(1), ms.TotalNodes())
 
 		for _, q := range queueSubs {
 			require.NoError(t, ms.Unsubscribe(q))
 		}
-		require.Equal(t, int(0), ms.root.NumNodes())
+		require.Equal(t, int(0), ms.TotalNodes())
 	})
 
 	t.Run("Probability", func(t *testing.T) {
@@ -423,7 +454,7 @@ func TestQueue(t *testing.T) {
 		var count [N]atomic.Uint64
 		var stat [N]uint64
 
-		var bus = NewBus()
+		var bus = NewMultiBus(4)
 
 		const (
 			subj  = "a"
@@ -481,7 +512,7 @@ func TestWildcard(t *testing.T) {
 
 		errSub := CallbackSubs("time.>.>", func(m Msg[int]) {})
 
-		var ms = NewMultiBus(1)
+		var ms = NewBus()
 		require.ErrorIs(t, ms.Subscribe(errSub), ErrInvalidSubject)
 		require.NoError(t, ms.Subscribe(wSubs1))
 		require.NoError(t, ms.Subscribe(wSubs2))
@@ -530,14 +561,14 @@ func TestWildcard(t *testing.T) {
 		require.Equal(t, int64(1), w1Count.Load())
 		require.Equal(t, int64(3), fCount.Load())
 
-		require.Equal(t, int(1), ms.root.NumNodes())
+		require.Equal(t, int(2), ms.TotalNodes())
 
 		require.NoError(t, ms.Unsubscribe(fSubs))
 		require.NoError(t, ms.Publish("time.now", 1))
 		require.Equal(t, int64(1), w1Count.Load())
 		require.Equal(t, int64(3), fCount.Load())
 
-		require.Equal(t, int(0), ms.root.NumNodes())
+		require.Equal(t, int(0), ms.TotalNodes())
 
 	})
 
@@ -569,6 +600,15 @@ func TestWildcard(t *testing.T) {
 		require.Equal(t, int64(2), w1Count.Load()+fCount.Load()+count.Load())
 		require.True(t, fCount.Load() >= 1)
 
+	})
+
+	t.Run("NotSupport", func(t *testing.T) {
+		var bus = NewMultiBus(4)
+		require.ErrorIs(t, bus.Subscribe(NewSubs("time.>", nil)), ErrNotSupport)
+		require.ErrorIs(t, bus.Subscribe(NewSubs("time.*", nil)), ErrNotSupport)
+		require.ErrorIs(t, bus.Unsubscribe(NewSubs("time.*", nil)), ErrNotFound)
+		require.NoError(t, bus.Subscribe(NewSubs("time.>*", nil)))
+		require.NoError(t, bus.Subscribe(NewSubs("time.*>", nil)))
 	})
 }
 

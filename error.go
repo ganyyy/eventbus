@@ -24,6 +24,7 @@ import (
 
 var (
 	ErrInvalidSubject = errors.New("sublist: invalid subject")
+	ErrNotSupport     = errors.New("sublist: not support")
 	ErrSublistNil     = errors.New("sublist: sublist is nil")
 	ErrNotFound       = errors.New("sublist: not found")
 	ErrSlowConsumer   = errors.New("subjection: slow consumer")
