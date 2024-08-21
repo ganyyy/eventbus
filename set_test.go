@@ -56,18 +56,19 @@ func TestSet(t *testing.T) {
 			var origin = []int{1, 2, 3}
 			s.Add(origin...)
 			sum := 0
-			s.Range(func(e int) bool {
-				sum += e
-				return true
-			})
+			for ele := range s.Range() {
+				sum += ele
+			}
 			var after = s.AppendToSlice(nil)
 			sort.IntSlice(after).Sort()
 			require.Equal(t, origin, after)
 			require.Equal(t, 6, sum)
 
-			s.Range(func(e int) bool {
-				return e != 2
-			})
+			for ele := range s.Range() {
+				if ele == 2 {
+					break
+				}
+			}
 		}
 
 		ts(NewSet[int](0))

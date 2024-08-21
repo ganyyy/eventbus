@@ -17,7 +17,10 @@ limitations under the License.
 
 package eventbus
 
-import "slices"
+import (
+	"iter"
+	"slices"
+)
 
 var empty struct{}
 
@@ -78,10 +81,12 @@ func (s Set[T]) Clear() {
 }
 
 // Range
-func (s Set[T]) Range(f func(e T) bool) {
-	for k := range s {
-		if !f(k) {
-			break
+func (s Set[T]) Range() iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for k := range s {
+			if !yield(k) {
+				break
+			}
 		}
 	}
 }
@@ -173,10 +178,12 @@ func (s *SliceSet[T]) Clear() {
 }
 
 // Range
-func (s *SliceSet[T]) Range(f func(e T) bool) {
-	for _, v := range s.elements {
-		if !f(v) {
-			break
+func (s *SliceSet[T]) Range() iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for _, v := range s.elements {
+			if !yield(v) {
+				break
+			}
 		}
 	}
 }
@@ -246,7 +253,7 @@ type ISet[T comparable] interface {
 	Len() int
 	AppendToSlice(slice []T) []T
 	Clear()
-	Range(f func(e T) bool)
+	Range() iter.Seq[T]
 }
 
 // ITransformSet is a set interface that can transform to another set.
